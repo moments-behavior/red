@@ -1289,10 +1289,14 @@ int main(int argc, char **argv) {
                                           annotations.end());
                     }
 
+                    // A box edge or label under the pointer shows the system
+                    // resize / move cursor, which the crosshairs would hide.
+                    const ImPlotFlags view_flags =
+                        ImPlotFlags_Equal | ImPlotFlags_NoMenus |
+                        (bbox_shows_resize_cursor(win.bbox, (int)j)
+                             ? ImPlotFlags_None : ImPlotFlags_Crosshairs);
                     if (ImPlot::BeginPlot("##no_plot_name", avail_size,
-                                          ImPlotFlags_Equal |
-                                              ImPlotFlags_Crosshairs |
-                                              ImPlotFlags_NoMenus)) {
+                                          view_flags)) {
                         // Shift+drag draws a bbox; the image holds still.
                         // Set every frame: ImPlot keeps an axis's flags until
                         // they are set again, so a lock set only while drawing

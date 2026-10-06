@@ -38,7 +38,43 @@ struct BBoxToolState {
     bool hovered = false;
     int hovered_cam = -1;
     int hovered_instance = -1;
+
+    // Moving a box's edges: the edge(s) under the pointer (or being dragged),
+    // as BoxEdge bits, on which camera and instance.
+    int edge_mask = 0;
+    int edge_cam = -1;
+    int edge_instance = -1;
+    bool resizing = false;      // dragging edge_mask's edges
+    double grab_dx = 0, grab_dy = 0;   // kEdgeMove: pointer to the box's top-left
 };
+
+// A box's edges, as bits, in screen terms (T is the edge drawn on top);
+// kEdgeMove is all of them at once -- the box moved whole, by its label.
+enum BoxEdge { kEdgeL = 1, kEdgeR = 2, kEdgeT = 4, kEdgeB = 8, kEdgeMove = 16 };
+
+// Where a box's label is drawn (plot coords; ImPlot centres text on it).
+inline ImPlotPoint box_label_anchor(double x1, double top) {
+    return ImPlotPoint(x1 + 4, top - 4);
+}
+
+// The resize cursor for a set of edges: <> for a side, up-down for top or
+// bottom, a diagonal at a corner.
+inline ImGuiMouseCursor box_edge_cursor(int mask) {
+    if (mask & kEdgeMove) return ImGuiMouseCursor_ResizeAll;
+    const bool h = mask & (kEdgeL | kEdgeR), v = mask & (kEdgeT | kEdgeB);
+    if (h && v)
+        return ((mask & kEdgeL) && (mask & kEdgeT)) || ((mask & kEdgeR) && (mask & kEdgeB))
+                   ? ImGuiMouseCursor_ResizeNWSE
+                   : ImGuiMouseCursor_ResizeNESW;
+    return h ? ImGuiMouseCursor_ResizeEW : ImGuiMouseCursor_ResizeNS;
+}
+
+// Whether camera view cam shows the resize cursor: ImPlot's crosshairs hide
+// the system cursor, so the view leaves them off then (set at BeginPlot, from
+// the frame before).
+inline bool bbox_shows_resize_cursor(const BBoxToolState &state, int cam) {
+    return state.enabled && state.edge_mask && state.edge_cam == cam;
+}
 
 // A class's colour, the same every session: the first cyan, the rest spread
 // round the hue circle by the golden ratio.
@@ -205,7 +241,8 @@ inline void bbox_draw_overlays(const BBoxToolState &state,
         ImGui::PopID();
 
         if (state.show_ids) {
-            ImPlot::PlotText(box_label(classes, fa).c_str(), x1 + 4, y2_plot - 4);
+            const ImPlotPoint at = box_label_anchor(x1, y2_plot);
+            ImPlot::PlotText(box_label(classes, fa).c_str(), at.x, at.y);
         }
     }
 }
@@ -214,7 +251,8 @@ inline void bbox_draw_overlays(const BBoxToolState &state,
 // drawing a box, not moving the image (ImPlot pans on left drag whatever the
 // modifiers).
 inline bool bbox_blocks_pan(const BBoxToolState &state) {
-    return state.enabled && (state.drawing || ImGui::GetIO().KeyShift);
+    return state.enabled && (state.drawing || state.resizing || state.edge_mask ||
+                             ImGui::GetIO().KeyShift);
 }
 
 // The pointer while a box can be drawn (Shift over a view) or is being drawn:
@@ -257,7 +295,14 @@ inline void bbox_handle_input(BBoxToolState &state,
     if (!state.enabled) return;
     // A drag belongs to the view it started in; the others leave it alone.
     if (state.drawing && cam_idx != state.drawing_cam) return;
-    if (!state.drawing && !ImPlot::IsPlotHovered()) return;
+    if (state.resizing && cam_idx != state.edge_cam) return;
+    // This view's edge hover is found afresh below (or not at all, if the
+    // pointer has left it).
+    if (!state.resizing && state.edge_cam == cam_idx) {
+        state.edge_mask = 0;
+        state.edge_cam = -1;
+    }
+    if (!state.drawing && !state.resizing && !ImPlot::IsPlotHovered()) return;
 
     ImPlotPoint mouse = ImPlot::GetPlotMousePos();
 
@@ -312,6 +357,111 @@ inline void bbox_handle_input(BBoxToolState &state,
     }
     if (state.drawing) return;
 
+    // Moving edges: follow the pointer until the button is let go.
+    if (state.resizing) {
+        ImGui::SetMouseCursor(box_edge_cursor(state.edge_mask));
+        auto it = amap.find(frame);
+        FrameAnnotation *fa = it != amap.end() && state.edge_instance >= 0 &&
+                                      state.edge_instance < (int)it->second.size()
+                                  ? &it->second[(size_t)state.edge_instance]
+                                  : nullptr;
+        if (!fa || cam_idx >= (int)fa->cameras.size() ||
+            !fa->cameras[cam_idx].has_bbox()) {
+            state.resizing = false;
+            return;
+        }
+        auto &e = fa->cameras[cam_idx].get_extras();
+        // Plot coords: y up, so the edge drawn on top is the larger y.
+        double l = e.bbox_x, r = e.bbox_x + e.bbox_w;
+        double b = img_h - e.bbox_y - e.bbox_h, t = img_h - e.bbox_y;
+        int &m = state.edge_mask;
+        if (m & kEdgeMove) {   // whole box, keeping its size and the grab point
+            const double w = r - l, h = t - b;
+            l = std::clamp(mx - state.grab_dx, 0.0, std::max(0.0, img_w - w));
+            t = std::clamp(my + state.grab_dy, h, (double)img_h);
+            r = l + w;
+            b = t - h;
+            m = kEdgeMove;
+        }
+        if (m & kEdgeL) l = mx;
+        if (m & kEdgeR) r = mx;
+        if (m & kEdgeB) b = my;
+        if (m & kEdgeT) t = my;
+        // Dragged past the opposite edge: carry on as that edge.
+        if (l > r) { std::swap(l, r); if (m & (kEdgeL | kEdgeR)) m ^= kEdgeL | kEdgeR; }
+        if (b > t) { std::swap(b, t); if (m & (kEdgeT | kEdgeB)) m ^= kEdgeT | kEdgeB; }
+        e.bbox_x = l;
+        e.bbox_w = std::max(r - l, 1.0);
+        e.bbox_y = img_h - t;
+        e.bbox_h = std::max(t - b, 1.0);
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            state.resizing = false;
+            state.edge_mask = 0;
+            state.edge_cam = -1;
+        }
+        return;
+    }
+
+    // An edge under the pointer (within a few pixels; a corner when near two),
+    // or the box's label: the resize / move cursor, and a press starts moving
+    // it. Not with Shift, which draws a new box, nor over a keypoint, which
+    // drags the keypoint.
+    if (!ImGui::GetIO().KeyShift && !keypoint_hovered_now()) {
+        auto it = amap.find(frame);
+        if (it != amap.end()) {
+            const ImVec2 mp = ImGui::GetIO().MousePos;
+            const float tol = 5.0f;
+            double best_area = 0;
+            for (size_t inst = 0; inst < it->second.size(); ++inst) {
+                const auto &fa = it->second[inst];
+                if (cam_idx >= (int)fa.cameras.size() || !fa.cameras[cam_idx].has_bbox())
+                    continue;
+                const auto &e = *fa.cameras[cam_idx].extras;
+                const ImVec2 tl = ImPlot::PlotToPixels(e.bbox_x, img_h - e.bbox_y);
+                const ImVec2 br = ImPlot::PlotToPixels(e.bbox_x + e.bbox_w,
+                                                       img_h - e.bbox_y - e.bbox_h);
+                if (mp.x < tl.x - tol || mp.x > br.x + tol || mp.y < tl.y - tol ||
+                    mp.y > br.y + tol)
+                    continue;
+                int mask = 0;
+                if (std::fabs(mp.x - tl.x) <= tol) mask |= kEdgeL;
+                else if (std::fabs(mp.x - br.x) <= tol) mask |= kEdgeR;
+                if (std::fabs(mp.y - tl.y) <= tol) mask |= kEdgeT;
+                else if (std::fabs(mp.y - br.y) <= tol) mask |= kEdgeB;
+                // The label moves the box whole; it wins over the edges.
+                if (state.show_ids) {
+                    const ImPlotPoint a = box_label_anchor(e.bbox_x, img_h - e.bbox_y);
+                    const ImVec2 c = ImPlot::PlotToPixels(a.x, a.y);
+                    const ImVec2 ts = ImGui::CalcTextSize(
+                        box_label(classes, fa).c_str());
+                    if (std::fabs(mp.x - c.x) <= ts.x * 0.5f + 2 &&
+                        std::fabs(mp.y - c.y) <= ts.y * 0.5f + 2)
+                        mask = kEdgeMove;
+                }
+                if (!mask) continue;
+                const double area = e.bbox_w * e.bbox_h;
+                if (!state.edge_mask || area < best_area) {
+                    state.edge_mask = mask;
+                    state.edge_cam = cam_idx;
+                    state.edge_instance = (int)inst;
+                    best_area = area;
+                }
+            }
+        }
+        if (state.edge_mask) {
+            ImGui::SetMouseCursor(box_edge_cursor(state.edge_mask));
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                state.resizing = true;
+                active_instance = state.edge_instance;   // the box being shaped
+                const auto &e = *it->second[(size_t)state.edge_instance]
+                                     .cameras[cam_idx].extras;
+                state.grab_dx = mx - e.bbox_x;              // pointer - left
+                state.grab_dy = (img_h - e.bbox_y) - my;    // top - pointer
+                return;
+            }
+        }
+    }
+
     // Hover: the smallest box under the pointer, over every instance, so a box
     // inside another can still be reached.
     state.hovered = false;
@@ -346,12 +496,16 @@ inline void bbox_handle_input(BBoxToolState &state,
     if (state.hovered) {
         mark_box_hovered();
         auto &fa = it->second[(size_t)state.hovered_instance];
+        // Either way that instance becomes the one being edited, ready to
+        // draw its box again.
         if (!keypoint_hovered_now() && box_key(ImGuiKey_R)) {
             fa.cameras[cam_idx].get_extras().has_bbox = false;
+            active_instance = state.hovered_instance;
             state.hovered = false;
         } else if (!keypoint_hovered_now() && box_key(ImGuiKey_F)) {
             for (auto &cam : fa.cameras)
                 if (cam.has_bbox()) cam.get_extras().has_bbox = false;
+            active_instance = state.hovered_instance;
             state.hovered = false;
         }
     }

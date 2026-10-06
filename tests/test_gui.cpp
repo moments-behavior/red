@@ -21,6 +21,7 @@
 #include "project_handler.h"
 #include "project.h"
 #include "app_context.h"
+#include "gui/bbox_tool.h"
 #include <cassert>
 #include <cctype>
 #include <cmath>
@@ -796,6 +797,149 @@ static void test_untitled_save_problem() {
     fs::remove_all(root);
 }
 
+// ── Bbox tool, driven through real ImGui/ImPlot frames ──
+// Headless: no window or renderer, a mouse fed through io events, and the
+// same calls a camera view makes. Covers what only shows when the input
+// code runs: drawing over an existing box, dragging an edge, and moving a
+// box by its label.
+namespace bbox_ui {
+struct Headless {
+    Headless() {
+        ImGui::CreateContext();
+        ImPlot::CreateContext();
+        ImGuiIO &io = ImGui::GetIO();
+        io.DisplaySize = ImVec2(800, 600);
+        io.DeltaTime = 1.0f / 60.0f;
+        io.IniFilename = nullptr;
+        // Apply each frame's key and mouse events together; trickling
+        // spreads them over frames, which a test scripting one state per
+        // frame does not want.
+        io.ConfigInputTrickleEventQueue = false;
+        unsigned char *px; int w, h;
+        io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    }
+    ~Headless() {
+        ImPlot::DestroyContext();
+        ImGui::DestroyContext();
+    }
+};
+
+constexpr int kW = 640, kH = 480;
+
+// One frame with the pointer at `mouse` (pixels), the left button and Shift
+// as given; `body` runs inside the plot, which spans the plot coords
+// [0,kW] x [0,kH]. The plot sees the pointer from the frame after it moves
+// there, so a test hovers for two frames before acting.
+template <typename Body>
+void frame(BBoxToolState &st, ImVec2 mouse, bool down, bool shift, Body body) {
+    ImGuiIO &io = ImGui::GetIO();
+    io.AddKeyEvent(ImGuiMod_Shift, shift);
+    io.AddKeyEvent(ImGuiKey_LeftShift, shift);
+    io.AddMousePosEvent(mouse.x, mouse.y);
+    io.AddMouseButtonEvent(0, down);
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::Begin("view", nullptr, ImGuiWindowFlags_NoDecoration);
+    if (ImPlot::BeginPlot("##cam", ImVec2(-1, -1), ImPlotFlags_NoMenus)) {
+        const ImPlotAxisFlags lock = bbox_blocks_pan(st) ? ImPlotAxisFlags_Lock
+                                                         : ImPlotAxisFlags_None;
+        ImPlot::SetupAxes(nullptr, nullptr, lock, lock);
+        ImPlot::SetupAxisLimits(ImAxis_X1, 0, kW, ImPlotCond_Always);
+        ImPlot::SetupAxisLimits(ImAxis_Y1, 0, kH, ImPlotCond_Always);
+        body();
+        ImPlot::EndPlot();
+    }
+    ImGui::End();
+    ImGui::Render();
+}
+
+// Pixel position of plot point (x, y), read inside a frame.
+ImVec2 px(BBoxToolState &st, double x, double y) {
+    ImVec2 p;
+    frame(st, ImVec2(-1, -1), false, false, [&] { p = ImPlot::PlotToPixels(x, y); });
+    return p;
+}
+
+// A frame with instance 0 holding a box on camera 0, plot x 100..300, y 100..300.
+AnnotationMap one_box() {
+    AnnotationMap amap;
+    auto &fa = get_or_create_frame(amap, 0, 1, 1, 0);
+    auto &e = fa.cameras[0].get_extras();
+    e.bbox_x = 100; e.bbox_y = kH - 300; e.bbox_w = 200; e.bbox_h = 200;
+    e.has_bbox = true;
+    return amap;
+}
+} // namespace bbox_ui
+
+static void test_bbox_ui_draw_over_box() {
+    printf("  test_bbox_ui_draw_over_box...\n");
+    using namespace bbox_ui;
+    Headless ui;
+    BBoxToolState st;
+    LabelInfo info;
+    AnnotationMap amap = one_box();
+    int active = 0;
+    auto input = [&] { bbox_handle_input(st, info, amap, 0, 0, active, 1, 1, kW, kH); };
+    const ImVec2 a = px(st, 150, 250), b = px(st, 250, 150);   // inside the box
+    frame(st, a, false, true, input);    // hover with Shift
+    frame(st, a, false, true, input);
+    frame(st, a, true, true, input);     // press: starts a box
+    EXPECT_TRUE(st.drawing);
+    frame(st, b, true, true, input);     // drag
+    frame(st, b, false, true, input);    // let go: commits
+    EXPECT_FALSE(st.drawing);
+    // Instance 0 already had a box here: the new one is instance 1.
+    EXPECT_TRUE((int)amap[0].size() == 2);
+    if (amap[0].size() == 2) {
+        const auto &e = *amap[0][1].cameras[0].extras;
+        EXPECT_TRUE(amap[0][1].cameras[0].has_bbox());
+        EXPECT_NEAR(e.bbox_x, 150, 2.0);
+        EXPECT_NEAR(e.bbox_w, 100, 2.0);
+        EXPECT_TRUE(active == 1);
+    }
+}
+
+static void test_bbox_ui_drag_edge_and_label() {
+    printf("  test_bbox_ui_drag_edge_and_label...\n");
+    using namespace bbox_ui;
+    Headless ui;
+    BBoxToolState st;
+    LabelInfo info;
+    AnnotationMap amap = one_box();
+    int active = 0;
+    auto input = [&] { bbox_handle_input(st, info, amap, 0, 0, active, 1, 1, kW, kH); };
+    auto &e = amap[0][0].cameras[0].get_extras();
+
+    // Left edge: hover shows it, press and drag moves it to x = 50.
+    const ImVec2 edge = px(st, 100, 200), to = px(st, 50, 200);
+    frame(st, edge, false, false, input);
+    frame(st, edge, false, false, input);
+    EXPECT_TRUE(st.edge_mask == kEdgeL);
+    frame(st, edge, true, false, input);
+    EXPECT_TRUE(st.resizing);
+    frame(st, to, true, false, input);
+    frame(st, to, false, false, input);
+    EXPECT_FALSE(st.resizing);
+    EXPECT_NEAR(e.bbox_x, 50, 2.0);
+    EXPECT_NEAR(e.bbox_w, 250, 2.0);    // the right edge stayed at 300
+
+    // The label (top-left): drag moves the whole box, size kept.
+    const ImPlotPoint lab = box_label_anchor(e.bbox_x, kH - e.bbox_y);
+    const ImVec2 l0 = px(st, lab.x, lab.y), l1 = px(st, lab.x + 100, lab.y - 50);
+    const double w0 = e.bbox_w, h0 = e.bbox_h, x0 = e.bbox_x, y0 = e.bbox_y;
+    frame(st, l0, false, false, input);
+    frame(st, l0, false, false, input);
+    EXPECT_TRUE(st.edge_mask == kEdgeMove);
+    frame(st, l0, true, false, input);
+    frame(st, l1, true, false, input);
+    frame(st, l1, false, false, input);
+    EXPECT_NEAR(e.bbox_x, x0 + 100, 2.0);
+    EXPECT_NEAR(e.bbox_y, y0 + 50, 2.0);   // image y grows downward
+    EXPECT_NEAR(e.bbox_w, w0, 1e-9);
+    EXPECT_NEAR(e.bbox_h, h0, 1e-9);
+}
+
 int main() {
     test_current_date_time();
 
@@ -809,6 +953,8 @@ int main() {
     test_project_handler_registry();
     test_setup_untitled_project();
     test_untitled_save_problem();
+    test_bbox_ui_draw_over_box();
+    test_bbox_ui_drag_edge_and_label();
 
     // Transport bar + UI overhaul tests
     test_transport_bar_state_defaults();
