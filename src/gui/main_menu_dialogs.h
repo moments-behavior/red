@@ -195,28 +195,6 @@ inline void HandleMainMenuDialogs(
         cfg.path = dir;
         cfg.fileName = name;
         cfg.flags = ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_HideColumnType;
-        // Beside the list: what Save will make, or -- in red, with OK greyed
-        // out -- why it can't, checked as the user types or moves.
-        cfg.sidePaneWidth = 230.0f;
-        cfg.sidePane = [](const char *, IGFD::UserDatas, bool *can_continue) {
-            auto *dlg = ImGuiFileDialog::Instance();
-            const std::string where = dlg->GetCurrentPath();
-            const std::string name =
-                dlg->GetCurrentFileName(IGFD_ResultMode_KeepInputFile);
-            const std::string why = untitled_save_problem(name, where);
-            ImGui::PushTextWrapPos(0.0f);
-            if (why.empty()) {
-                ImGui::TextDisabled("Save makes the folder");
-                ImGui::TextUnformatted(
-                    (std::filesystem::path(where) / name).string().c_str());
-                ImGui::TextDisabled("with the project and its labels in it.");
-            } else {
-                ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s",
-                                   why.c_str());
-                *can_continue = false;
-            }
-            ImGui::PopTextWrapPos();
-        };
         // No filter (""): no type list beside the name. Not nullptr, which
         // would make it a folder picker that names the clicked folder.
         ImGuiFileDialog::Instance()->OpenDialog(
@@ -230,10 +208,26 @@ inline void HandleMainMenuDialogs(
                 ? std::string("Untitled")
                 : std::filesystem::path(pm.media_folder).filename().string());
     }
-    igfd_file_name_label() = "Folder Name:";
+    // Under the name: the folder Save will make, or in red why it can't (OK
+    // greyed out), checked as the user types or moves.
+    IgfdHooks &hooks = igfd_hooks();
+    hooks.name_label = "Folder Name:";
+    hooks.under_name = [] {
+        auto *dlg = ImGuiFileDialog::Instance();
+        const std::string where = dlg->GetCurrentPath();
+        const std::string name =
+            dlg->GetCurrentFileName(IGFD_ResultMode_KeepInputFile);
+        const std::string why = untitled_save_problem(name, where);
+        if (why.empty())
+            ImGui::TextDisabled("Makes %s",
+                                (std::filesystem::path(where) / name).string().c_str());
+        else
+            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", why.c_str());
+        return why.empty();
+    };
     const bool save_done = ImGuiFileDialog::Instance()->Display(
         "SaveUntitledProject", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440));
-    igfd_file_name_label() = "File Name:";
+    hooks = IgfdHooks{};
     if (save_done) {
         if (ImGuiFileDialog::Instance()->IsOk()) {
             const std::string dir = ImGuiFileDialog::Instance()->GetCurrentPath();
@@ -241,14 +235,17 @@ inline void HandleMainMenuDialogs(
                 IGFD_ResultMode_KeepInputFile);
             ImGuiFileDialog::Instance()->Close();
             std::string err;
-            if (save_untitled_project(ctx, name, dir, &err)) {
+            if (!untitled_save_problem(name, dir).empty()) {
+                // Enter in the name field gets past the greyed-out OK: stay
+                // in the dialog, where the line already says why.
+                open_save_dialog(dir, name);
+            } else if (save_untitled_project(ctx, name, dir, &err)) {
                 ctx.toasts.pushSuccess("Saved project " + pm.project_name);
                 auto after = std::move(ctx.after_save_action);
                 ctx.after_save_action = nullptr;
                 if (after) after();
             } else {
-                // Rare (the side pane already checked the name): the disk
-                // refused. Say so mid-screen; nothing waits on it now.
+                // The name was fine but the disk refused. Say so mid-screen; nothing waits on it now.
                 ctx.popups.pushError("Could not save the project: " + err);
                 ctx.after_save_action = nullptr;
             }
