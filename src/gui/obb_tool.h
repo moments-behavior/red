@@ -105,7 +105,8 @@ inline bool obb_contains(double cx, double cy, double w, double h,
 inline void obb_draw_overlays(OBBToolState &state, const BBoxToolState &bbox_state,
                                const LabelInfo &classes,
                                const AnnotationMap &amap, u32 frame,
-                               int cam_idx, int img_w, int img_h) {
+                               int cam_idx, int active_instance,
+                               int img_w, int img_h) {
     (void)img_w;
     auto it = amap.find(frame);
     if (it != amap.end()) {
@@ -131,6 +132,7 @@ inline void obb_draw_overlays(OBBToolState &state, const BBoxToolState &bbox_sta
 
             ImPlotSpec ospec;
             ospec.LineColor = color;
+            ospec.LineWeight = (int)inst == active_instance ? 3.0f : 1.0f;
             ImGui::PushID((int)inst);
             ImPlot::PlotLine("##obb", xs, ys, 5, ospec);
             ImGui::PopID();

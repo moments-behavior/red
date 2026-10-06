@@ -242,6 +242,8 @@ inline void bbox_draw_overlays(const BBoxToolState &state,
         ImPlotSpec bspec;
         bspec.LineColor = color;
         bspec.FillColor = ImVec4(color.x, color.y, color.z, 0.15f);
+        // The instance being edited stands out.
+        bspec.LineWeight = (int)inst == active_instance ? 3.0f : 1.0f;
         ImGui::PushID((int)inst);
         ImPlot::PlotLine("##bbox", xs, ys, 5, bspec);
         ImGui::PopID();

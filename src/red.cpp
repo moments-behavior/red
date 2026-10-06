@@ -1623,7 +1623,8 @@ int main(int argc, char **argv) {
                             }
                             if (display.show_bboxes) {
                                 obb_draw_overlays(win.obb, win.bbox, label_info,
-                                                  annotations, frame, j, iw, ih);
+                                                  annotations, frame, j,
+                                                  active_instance, iw, ih);
                             }
 
                             // Midline tool (line drawing in the line camera)
