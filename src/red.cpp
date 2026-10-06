@@ -1683,6 +1683,37 @@ int main(int argc, char **argv) {
                             ImGui::OpenPopup("##plot_settings");
                         }
                         if (ImGui::BeginPopup("##plot_settings")) {
+                            // Who is NOT in this camera on this frame: an
+                            // explicit negative (tailcycle's `absent`), not
+                            // just "not labelled yet". Drawing a box there
+                            // clears it.
+                            ImGui::SeparatorText("This Camera");
+                            {
+                                const u32 f = (u32)current_frame_num;
+                                auto it = annotations.find(f);
+                                if (it == annotations.end() || it->second.empty()) {
+                                    if (ImGui::MenuItem("No animal here (mark absent)")) {
+                                        auto &fa = get_or_create_frame(
+                                            annotations, f, skeleton.num_nodes,
+                                            (int)scene->num_cams);
+                                        if (j < fa.cameras.size())
+                                            set_absent(fa.cameras[j], true);
+                                        active_instance = 0;
+                                    }
+                                } else {
+                                    const auto &info = pm.annotation_config.label_info;
+                                    for (auto &fa : it->second) {
+                                        if (j >= fa.cameras.size()) continue;
+                                        auto &cam = fa.cameras[j];
+                                        const bool absent = cam.is_absent();
+                                        const std::string item =
+                                            info.instance_name(fa.instance_id) +
+                                            " absent here";
+                                        if (ImGui::MenuItem(item.c_str(), nullptr, absent))
+                                            set_absent(cam, !absent);
+                                    }
+                                }
+                            }
                             ImGui::SeparatorText("Plot Settings");
                             if (ImGui::MenuItem("Fit X Axis"))
                                 ImPlot::SetupAxisLimits(ImAxis_X1, 0, scene->image_width[j]);

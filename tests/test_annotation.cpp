@@ -2391,6 +2391,52 @@ static void test_export_yolo_box_classes() {
     EXPECT_TRUE(classes.size() == 2 && classes[0] == 0 && classes[1] == 1);
 }
 
+// "Not in this camera": an absent mark drops the box, survives
+// annotations.json, and a frame where it is the only label still goes to
+// YOLO -- as an image with an empty label file (a background).
+static void test_absent_mark() {
+    printf("  test_absent_mark...\n");
+    namespace fs = std::filesystem;
+    CameraAnnotation cam;
+    auto &e = cam.get_extras();
+    e.bbox_w = 10; e.bbox_h = 10; e.has_bbox = true;
+    set_absent(cam, true);
+    EXPECT_TRUE(cam.is_absent());
+    EXPECT_FALSE(cam.has_bbox());
+
+    ExportTestFixture fix;
+    fix.amap.clear();
+    auto &fa = get_or_create_frame(fix.amap, 300, 3, 2);
+    set_absent(fa.cameras[0], true);
+    EXPECT_TRUE(frame_has_any_labels(fa));
+
+    const fs::path dir = fs::path(fix.output_dir) / "json";
+    fs::create_directories(dir);
+    EXPECT_TRUE(save_annotations_json(fix.amap, dir.string()));
+    AnnotationMap back;
+    get_or_create_frame(back, 300, 3, 2);
+    EXPECT_TRUE(load_annotations_json(back, dir.string()));
+    EXPECT_TRUE(back[300].front().cameras[0].is_absent());
+    EXPECT_FALSE(back[300].front().cameras[1].is_absent());
+
+    fix.cfg.train_ratio = 1.0f;
+    std::string status;
+    EXPECT_TRUE(ExportFormats::export_yolo(fix.cfg, fix.amap, false, &status));
+    bool empty_label = false;
+    for (const char *split : {"train", "val"}) {
+        const fs::path p = fs::path(fix.output_dir) / "labels" / split / "cam0" / "Frame_300.txt";
+        if (fs::exists(p)) empty_label = fs::file_size(p) == 0;
+    }
+    EXPECT_TRUE(empty_label);
+    // cam1 has nothing on that frame, not even an absent mark: no label file
+    // (and no image), rather than a false background.
+    bool cam1_label = false;
+    for (const char *split : {"train", "val"})
+        cam1_label |= fs::exists(fs::path(fix.output_dir) / "labels" / split / "cam1" /
+                                 "Frame_300.txt");
+    EXPECT_FALSE(cam1_label);
+}
+
 int main() {
     printf("=== Annotation System Tests ===\n");
 
@@ -2454,6 +2500,7 @@ int main() {
     test_export_yolo_pose_full_pipeline();
     test_export_yolo_detect_no_keypoints();
     test_export_yolo_box_classes();
+    test_absent_mark();
 
     printf("\n--- Export Pipeline: DeepLabCut ---\n");
     test_export_deeplabcut_full_pipeline();

@@ -393,13 +393,15 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
                         bool include_keypoints, std::string *status,
                         std::atomic<int> *img_counter = nullptr) {
     namespace fs = std::filesystem;
-    // Frames with keypoints or a box: a detection set can be boxes alone.
+    // Frames with keypoints or a box -- a detection set can be boxes alone --
+    // or an instance marked absent: an image with nothing to find, written
+    // with an empty label file (a background image to YOLO).
     std::vector<u32> labeled;
     for (const auto &[f, fis] : amap) {
         bool any = any_instance_has_keypoints(fis);
         for (const auto &fa : fis)
             for (const auto &cam : fa.cameras)
-                any = any || cam.has_bbox();
+                any = any || cam.has_bbox() || cam.is_absent();
         if (any) labeled.push_back(f);
     }
     if (labeled.empty()) {
@@ -415,6 +417,12 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
     if (!resolve_image_dims(cfg, img_w, img_h, status))
         return false;
 
+    // A camera view with nothing labelled in it -- no box, no keypoints, no
+    // absent mark -- gets neither a label file nor an image: to YOLO an image
+    // without labels is a background ("nothing here"), which is only true
+    // where someone said so. Their images are extracted with the frame's
+    // others and removed after.
+    std::vector<std::string> unlabelled_images;
     auto write_split = [&](const std::vector<u32> &frames, const std::string &split) {
         for (int ci = 0; ci < (int)cfg.camera_names.size(); ++ci) {
             const auto &cam_name = cfg.camera_names[ci];
@@ -431,12 +439,17 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
                 if (it->second.empty()) continue;
 
                 std::string fname = "Frame_" + std::to_string(frame);
-                std::ofstream lbl(lbl_dir + "/" + fname + ".txt");
+                std::ostringstream lbl;
+                bool absent_here = false;
 
                 // One line per instance: every object in the image.
                 for (const auto &fa : it->second) {
                     if (ci >= (int)fa.cameras.size()) continue;
                     const auto &c2d = fa.cameras[ci];
+                    if (c2d.is_absent()) {   // not in this image: no line
+                        absent_here = true;
+                        continue;
+                    }
 
                     // Compute bbox (normalized)
                     double bx, by, bw, bh;
@@ -485,6 +498,12 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
                     }
                     lbl << "\n";
                 } // instances
+
+                const std::string text = lbl.str();
+                if (!text.empty() || absent_here)
+                    std::ofstream(lbl_dir + "/" + fname + ".txt") << text;
+                else
+                    unlabelled_images.push_back(img_dir + "/" + fname + ".jpg");
             }
         }
     };
@@ -529,6 +548,8 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
         img_cfg.output_folder = cfg.output_folder + "/images";
         if (!extract_images(img_cfg, train, val, "", status, img_counter))
             return false;
+        std::error_code ec;
+        for (const auto &p : unlabelled_images) fs::remove(p, ec);
     }
 
     std::string fmt = include_keypoints ? "YOLO Pose" : "YOLO Detection";
@@ -963,7 +984,8 @@ inline bool export_nerfstudio(const ExportConfig &cfg, const AnnotationMap &amap
 // ═══════════════════════════════════════════════════════════════════════════
 // Main dispatch
 // ═══════════════════════════════════════════════════════════════════════════
-// Red frames in [start, end] carrying an assessed keypoint or a box (in camera
+// Red frames in [start, end] carrying an assessed keypoint, a box or an absent
+// mark (in camera
 // `cam`, or any camera if cam < 0), or a 3D point unless the export is 2D only.
 inline std::vector<int> tailcycle_labelled_frames(const AnnotationMap &amap, int cam,
                                                   int layers, int start, int end) {
@@ -976,6 +998,7 @@ inline std::vector<int> tailcycle_labelled_frames(const AnnotationMap &amap, int
                 if (cam >= 0 && (int)ci != cam) continue;
                 const CameraAnnotation &c = fa.cameras[ci];
                 any |= c.has_bbox() && c.extras->bbox_w > 0 && c.extras->bbox_h > 0;
+                any |= c.is_absent();   // "not here" is a label too
                 if (layers != 2)
                     for (const auto &kp : c.keypoints) any |= keypoint2d_assessed(kp);
             }

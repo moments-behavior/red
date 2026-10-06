@@ -562,10 +562,11 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
         }
     }
 
-    // ── instances.pq ── boxes only; red has no model for `present`/`absent`
-    // without a box, and an in-place save keeps those rows (see
-    // TailcycleExport's in_place). A `present` box loads like a `labeled` one;
-    // a box on an `absent` row is not a positive and is skipped.
+    // ── instances.pq ── boxes, and absent marks. A `present` box loads like a
+    // `labeled` one; an `absent` row marks that animal absent in that camera
+    // (any box on it is not a positive and is ignored). `present` without a
+    // box has no red model, and an in-place save keeps those rows (see
+    // TailcycleExport's in_place).
     if (auto it = read_pq(D / "instances.pq")) {
         out->has_boxes = true;
         DictCol cam(it, "camera"), aid(it, "animal_id"), gid(it, "group_id"), stt(it, "status");
@@ -585,9 +586,14 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
             }
             const bool box = !x0.null[i] && !y0.null[i] && !x1.null[i] && !y1.null[i] &&
                              Tailcycle::box_nonempty(x0.vals[i], y0.vals[i], x1.vals[i], y1.vals[i]);
-            if (!Tailcycle::instance_box_loaded(s, box)) continue;
             const int f = (int)fr.vals[i], ci = name_index(out->camera_names, cam.vals[i]);
             if (f < 0 || f >= out->n_frames || ci < 0) continue;
+            if (Tailcycle::instance_absent_loaded(s)) {
+                set_absent(frame_of((u32)f, instance_of(aid.ok ? aid.vals[i] : "a00"))
+                               .cameras[ci], true);
+                continue;
+            }
+            if (!Tailcycle::instance_box_loaded(s, box)) continue;
             CameraExtras &e = frame_of((u32)f, instance_of(aid.ok ? aid.vals[i] : "a00"))
                                   .cameras[ci].get_extras();
             e.bbox_x = x0.vals[i];

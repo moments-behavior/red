@@ -245,10 +245,11 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
     auto has_box = [](const CameraAnnotation &cam) {
         return cam.has_bbox() && cam.extras->bbox_w > 0 && cam.extras->bbox_h > 0;
     };
-    // A box on a view with no keypoint or 3D row to write is a box-only
-    // (detection) label; it goes in the annotated session.
+    // A box (or absent mark) on a view with no keypoint or 3D row to write is
+    // a box-only (detection) label; it goes in the annotated session.
+    // An absent mark counts the same way: it is a label with nothing else.
     auto box_only = [&](const FrameAnnotation &fa, size_t ci) {
-        if (!has_box(fa.cameras[ci])) return false;
+        if (!has_box(fa.cameras[ci]) && !fa.cameras[ci].is_absent()) return false;
         if (cfg.layers != ExportConfig::Layers::ThreeD)
             for (const auto &kp : fa.cameras[ci].keypoints)
                 if (keypoint2d_assessed(kp)) return false;
@@ -635,14 +636,15 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
         }
 
         // ── instances.pq (§9) ──
-        // One `labeled` row per box, and nothing else: a view without a box
-        // has no row. A box-only annotation is also `labeled`: it is a
+        // One `labeled` row per box, and one `absent` row (no box) per view
+        // where the instance is marked absent; nothing else: a view without
+        // either has no row. A box-only annotation is also `labeled`: it is a
         // human-placed box, and `present` would make it an ignore region a
         // detector never learns from. red's bboxes are already top-left image
         // coordinates, so only origin+extent -> [x0,x1) is converted.
         //
-        // In place, an edited view's rows become exactly red's boxes (a
-        // `present` box becomes `labeled`, `absent` and box-less rows go); an
+        // In place, an edited view's rows become exactly red's (boxes as
+        // `labeled`, absent marks as `absent`; other box-less rows go); an
         // unedited view keeps its rows as they are, except `labeled` rows with
         // no box, which rule 11 forbids.
         {
@@ -659,20 +661,29 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                 if (!grp) continue;
                 for (size_t ci = 0; ci < fa.cameras.size() && ci < cfg.camera_names.size(); ci++) {
                     const CameraAnnotation &cam = fa.cameras[ci];
-                    if (!has_box(cam)) continue;
+                    const bool absent = cam.is_absent();
+                    if (!has_box(cam) && !absent) continue;
                     if (cfg.in_place && !cfg.edited_views.count({(int)fnum, (int)ci})) continue;
                     if (box_job(fa, ci) != &job) continue;
-                    const CameraExtras &e = *cam.extras;
                     if (!g_b.Append(grp->id).ok() || !f_b.Append(frame).ok() ||
                         !a_b.Append(animal_id_of(fa.instance_id)).ok() ||
                         !c_b.Append(cfg.camera_names[ci]).ok() ||
-                        !s_b.Append(Tailcycle::status::kLabeled).ok() ||
-                        !n_b.AppendNull().ok() ||
-                        !x0_b.Append((float)e.bbox_x).ok() ||
-                        !y0_b.Append((float)e.bbox_y).ok() ||
-                        !x1_b.Append((float)(e.bbox_x + e.bbox_w)).ok() ||
-                        !y1_b.Append((float)(e.bbox_y + e.bbox_h)).ok())
+                        !n_b.AppendNull().ok())
                         return fail("instances.pq: builder append failed.");
+                    bool ok;
+                    if (absent) {   // not in this camera: an `absent` row, no box
+                        ok = s_b.Append(Tailcycle::status::kAbsent).ok() &&
+                             x0_b.AppendNull().ok() && y0_b.AppendNull().ok() &&
+                             x1_b.AppendNull().ok() && y1_b.AppendNull().ok();
+                    } else {
+                        const CameraExtras &e = *cam.extras;
+                        ok = s_b.Append(Tailcycle::status::kLabeled).ok() &&
+                             x0_b.Append((float)e.bbox_x).ok() &&
+                             y0_b.Append((float)e.bbox_y).ok() &&
+                             x1_b.Append((float)(e.bbox_x + e.bbox_w)).ok() &&
+                             y1_b.Append((float)(e.bbox_y + e.bbox_h)).ok();
+                    }
+                    if (!ok) return fail("instances.pq: builder append failed.");
                     rows++;
                 }
             }

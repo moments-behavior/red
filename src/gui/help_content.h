@@ -95,7 +95,7 @@ inline const std::vector<Group> &shortcut_groups() {
             {S::DeleteAllKp, nullptr, "Delete all keypoints on this frame"},
             {S::Triangulate, nullptr, "Triangulate the current frame", Gate::Need3D,
                  "Needs the same keypoint in \xE2\x89\xA5 2 cameras"},
-            {S::COUNT, "Right-click", "On an empty spot in a camera view: the view menu (fit the image, show or hide keypoints and boxes)"},
+            {S::COUNT, "Right-click", "On an empty spot in a camera view: the view menu (mark who is absent from this camera, fit the image, show or hide keypoints and boxes)"},
             {S::PeekRaw, nullptr, "Hide this view's labels to peek at the raw image underneath"},
         }},
         {"Labeling \xE2\x80\x94 hovering a keypoint", "Hover an existing (drawn) keypoint", Gate::Always, {
@@ -119,7 +119,7 @@ inline const std::vector<Group> &shortcut_groups() {
             {S::COUNT, "Shift + drag", "Draw a box of the selected class: press with Shift held, drag, let go (Esc cancels). It goes on the instance being edited, or starts the next instance if that one already has a box on this camera"},
             {S::COUNT, "R", "Delete the hovered box on this camera (a hovered keypoint takes R first)"},
             {S::COUNT, "F", "Delete the hovered instance's box on all cameras (a hovered keypoint takes F first)"},
-            {S::COUNT, "Right-click", "On a box: a menu to edit its instance, change its class, or delete it"},
+            {S::COUNT, "Right-click", "On a box: a menu to edit its instance, change its class, mark it absent here, or delete it"},
         }},
         {"OBB tool", "When the OBB tool is enabled", Gate::ToolObb, {
             {S::COUNT, "G  (\xC3\x97""3)", "Place axis point 1, axis point 2, then the corner"},

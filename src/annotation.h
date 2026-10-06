@@ -191,6 +191,11 @@ struct CameraExtras {
     // Oriented bounding box
     double obb_cx = 0, obb_cy = 0, obb_w = 0, obb_h = 0, obb_angle = 0;
     bool has_obb = false;
+
+    // This instance is not in this camera's view on this frame: an explicit
+    // negative ("no box here"), not "not labelled yet". tailcycle's `absent`
+    // instance row; a YOLO image with no line for it. Excludes a box.
+    bool absent = false;
 };
 
 // ── Per-camera annotation for one frame ──
@@ -230,6 +235,7 @@ struct CameraAnnotation {
 
     // Convenience queries
     bool has_bbox() const { return extras && extras->has_bbox; }
+    bool is_absent() const { return extras && extras->absent; }
     bool has_obb()  const { return extras && extras->has_obb;  }
 };
 
@@ -303,6 +309,15 @@ struct LabelInfo {
                    : "#" + std::to_string(id);
     }
 };
+
+// Mark (or unmark) an instance absent in one camera: absent drops its box
+// there; a box drawn there clears absent again (bbox / OBB tools).
+inline void set_absent(CameraAnnotation &cam, bool absent) {
+    if (!absent && !cam.extras) return;
+    auto &e = cam.get_extras();
+    e.absent = absent;
+    if (absent) { e.has_bbox = false; e.has_obb = false; }
+}
 
 // ── The main annotation container ──
 // ── The main annotation container ──
@@ -389,6 +404,7 @@ inline bool view_labels_equal(const FrameInstances *a, const FrameInstances *b, 
             return c && c->has_bbox() && c->extras->bbox_w > 0 && c->extras->bbox_h > 0;
         };
         if (box(x) != box(y)) return false;
+        if ((x && x->is_absent()) != (y && y->is_absent())) return false;
         if (box(x) && (x->extras->bbox_x != y->extras->bbox_x ||
                        x->extras->bbox_y != y->extras->bbox_y ||
                        x->extras->bbox_w != y->extras->bbox_w ||
@@ -489,7 +505,7 @@ inline bool frame_has_any_labels(const FrameAnnotation &fa) {
     for (const auto &cam : fa.cameras) {
         for (const auto &kp : cam.keypoints)
             if (keypoint2d_assessed(kp)) return true;
-        if (cam.has_bbox() || cam.has_obb()) return true;
+        if (cam.has_bbox() || cam.has_obb() || cam.is_absent()) return true;
     }
     return false;
 }
@@ -520,6 +536,9 @@ inline bool frame_has_any_manual_labels(const FrameAnnotation &fa) {
             // at all, and that frame is still your work.
             if ((kp.is_occluded() && !kp.is_predicted()) ||
                 (kp.usable() && kp.is_manual())) return true;
+    // Marking an instance absent is hand-made too.
+    for (const auto &cam : fa.cameras)
+        if (cam.is_absent()) return true;
     return false;
 }
 
@@ -638,7 +657,7 @@ inline nlohmann::json annotations_to_json(const AnnotationMap &amap) {
         // OR a single-view midline constraint.
         bool has_extended = fa.needs_improvement || fa.midline.has_line;
         for (const auto &cam : fa.cameras) {
-            if (cam.has_bbox() || cam.has_obb()) {
+            if (cam.has_bbox() || cam.has_obb() || cam.is_absent()) {
                 has_extended = true;
                 break;
             }
@@ -677,6 +696,7 @@ inline nlohmann::json annotations_to_json(const AnnotationMap &amap) {
             if (ext.has_obb) {
                 jc["obb"] = {ext.obb_cx, ext.obb_cy, ext.obb_w, ext.obb_h, ext.obb_angle};
             }
+            if (ext.absent) jc["absent"] = true;
 
             if (jc.size() > 1) // more than just "cam"
                 cams.push_back(jc);
@@ -741,6 +761,10 @@ inline void annotations_from_json(const nlohmann::json &root, AnnotationMap &ama
                 ext.obb_cx = o[0]; ext.obb_cy = o[1];
                 ext.obb_w = o[2]; ext.obb_h = o[3]; ext.obb_angle = o[4];
                 ext.has_obb = true;
+            }
+            if (jc.value("absent", false)) {
+                ext.absent = true;
+                ext.has_bbox = false;   // absent excludes a box
             }
         }
     }

@@ -220,6 +220,30 @@ inline void bbox_draw_overlays(const BBoxToolState &state,
     auto it = amap.find(frame);
     if (it == amap.end()) return;
     const FrameInstances &fis = it->second;
+
+    // Who is marked absent in this camera: listed in the view's top-left, in
+    // their colours -- there is no box to show it.
+    {
+        ImDrawList *dl = ImPlot::GetPlotDrawList();
+        ImVec2 at(ImPlot::GetPlotPos().x + 8, ImPlot::GetPlotPos().y + 6);
+        bool any = false;
+        for (size_t inst = 0; inst < fis.size(); ++inst) {
+            const auto &fa = fis[inst];
+            if (cam_idx >= (int)fa.cameras.size() || !fa.cameras[cam_idx].is_absent())
+                continue;
+            if (!any) {
+                dl->AddText(at, IM_COL32(220, 220, 220, 230), "Absent:");
+                at.x += ImGui::CalcTextSize("Absent: ").x;
+                any = true;
+            }
+            const std::string name = classes.instance_name(fa.instance_id);
+            dl->AddText(at, ImGui::GetColorU32(box_draw_color(classes, fa.category_id,
+                                                              fa.instance_id, (int)inst)),
+                        name.c_str());
+            at.x += ImGui::CalcTextSize((name + "  ").c_str()).x;
+        }
+    }
+
     for (size_t inst = 0; inst < fis.size(); ++inst) {
         const FrameAnnotation &fa = fis[inst];
         if (cam_idx >= (int)fa.cameras.size()) continue;
@@ -363,6 +387,7 @@ inline void bbox_handle_input(BBoxToolState &state,
             ext.bbox_w = x2 - x1;
             ext.bbox_h = y2_plot - y1_plot;
             ext.has_bbox = true;
+            ext.absent = false;   // a box says it is here
         }
         return;
     }
@@ -591,6 +616,13 @@ inline void bbox_draw_menu(BBoxToolState &state, LabelInfo &classes,
         fa.cameras[(size_t)cam_idx].get_extras().has_bbox = false;
         active_instance = state.menu_instance;
     }
+    if (ImGui::MenuItem("Mark absent here")) {
+        set_absent(fa.cameras[(size_t)cam_idx], true);
+        active_instance = state.menu_instance;
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+        ImGui::SetTooltip("Not in this camera on this frame: removes the box and\n"
+                          "records an explicit 'no box here' (tailcycle's absent).");
     if (ImGui::MenuItem("Delete on all cameras", "F")) {
         for (auto &cam : fa.cameras)
             if (cam.has_bbox()) cam.get_extras().has_bbox = false;

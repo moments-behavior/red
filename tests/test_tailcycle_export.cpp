@@ -809,6 +809,47 @@ int main(int argc, char **argv) {
         CHECK(rt, "box round-trips through instances.pq");
     }
 
+    // ── 4c2. an absent mark is an `absent` row with no box, and comes back ──
+    {
+        const std::string out = root + "/t4c2";
+        auto cfg = make_config(out);
+        AnnotationMap amap = make_annotations();
+        {
+            CameraExtras &e = amap.at(0).front().cameras[0].get_extras();
+            e.bbox_x = 10; e.bbox_y = 20; e.bbox_w = 30; e.bbox_h = 40; e.has_bbox = true;
+        }
+        // Animal a00 is not in camB on frame 0.
+        set_absent(amap.at(0).front().cameras[1], true);
+        TailcycleExport::ExportStats st;
+        std::string status;
+        CHECK(TailcycleExport::export_session(cfg, amap, &st, &status),
+              "export with an absent mark succeeds: " + status);
+        const fs::path A = fs::path(out) / "train" / "sess1_annotated";
+        auto it = read_pq(A / "instances.pq");
+        CHECK(it && it->num_rows() == 2, "a box row and an absent row");
+        bool absent_ok = false;
+        for (int64_t r = 0; it && r < it->num_rows(); r++) {
+            if (dict_at(it, "status", r) != "absent") continue;
+            auto x0 = std::static_pointer_cast<arrow::FloatArray>(
+                it->GetColumnByName("x0")->chunk(0));
+            absent_ok = int_at(it, "frame", r) == 0 && dict_at(it, "camera", r) == "camB" &&
+                        dict_at(it, "animal_id", r) == "a00" && x0->IsNull(r);
+        }
+        CHECK(absent_ok, "absent row: frame 0, camB, a00, no box");
+
+        TailcycleImport::Session imported;
+        TailcycleImport::ImportStats ist;
+        CHECK(TailcycleImport::read_session(A.string(), "sess1", &imported, &ist, &status),
+              "session with an absent row imports: " + status);
+        bool rt = false;
+        if (imported.annotations.count(0))
+            for (const auto &fa : imported.annotations.at(0))
+                if (fa.instance_id == 0)
+                    rt = fa.cameras[1].is_absent() && !fa.cameras[1].has_bbox() &&
+                         fa.cameras[0].has_bbox() && !fa.cameras[0].is_absent();
+        CHECK(rt, "absent round-trips through instances.pq");
+    }
+
     // ── 4d. a boxes-only project exports as a detection-only session ──
     {
         const std::string out = root + "/t4d";
@@ -1022,15 +1063,20 @@ int main(int argc, char **argv) {
             return s;
         };
 
-        // Import: `labeled` and `present` boxes load, `absent` and box-less rows do not.
+        // Import: `labeled` and `present` boxes load as boxes, `absent` rows as
+        // absent marks; box-less `present` rows do not load.
         {
             TailcycleImport::Session s;
             if (open_gA(&s)) {
-                int boxes = 0;
+                int boxes = 0, absents = 0;
                 for (const auto &[f, fis] : s.annotations)
                     for (const auto &fa : fis)
-                        for (const auto &cam : fa.cameras) boxes += cam.has_bbox();
+                        for (const auto &cam : fa.cameras) {
+                            boxes += cam.has_bbox();
+                            absents += cam.is_absent();
+                        }
                 CHECK(boxes == 3, "the two present boxes and the labeled one load");
+                CHECK(absents == 2, "a01's two absent rows load as absent marks");
             }
         }
         // An unedited save keeps every row; only the invalid null-box labeled row goes.
@@ -1054,11 +1100,17 @@ int main(int argc, char **argv) {
                 if (save_gA(s, amap, {{0, 0}}, {})) {
                     const auto I = row_set(d / "instances.pq");
                     const auto view = rows_where(I, {"group_id=gA", "frame=0", "camera=camA"});
-                    CHECK(view.size() == 1, "edited view: exactly red's box");
-                    CHECK(view.size() == 1 &&
-                              view.begin()->find("status=labeled;") != std::string::npos &&
-                              view.begin()->find("x0=101.000000;") != std::string::npos,
+                    // Exactly red's: a00's box and a01's absent mark; a02's
+                    // box-less `present` row, which red cannot hold, goes.
+                    CHECK(view.size() == 2, "edited view: exactly red's box and absent mark");
+                    const auto lab = rows_where(I, {"group_id=gA", "frame=0", "camera=camA",
+                                                    "status=labeled"});
+                    CHECK(lab.size() == 1 &&
+                              lab.begin()->find("x0=101.000000;") != std::string::npos,
                           "edited view: the present box is labeled, at its new place");
+                    CHECK(rows_where(I, {"group_id=gA", "frame=0", "camera=camA",
+                                         "animal_id=a01", "status=absent"}).size() == 1,
+                          "edited view: the absent mark is written back");
                     CHECK(rows_where(I, {"frame=0", "camera=camB"}) ==
                               rows_where(I0, {"frame=0", "camera=camB"}),
                           "the other camera at that frame is untouched");
@@ -1102,13 +1154,16 @@ int main(int argc, char **argv) {
                 for (auto &[f, fis] : amap)
                     for (auto &fa : fis)
                         for (auto &cam : fa.cameras) {
-                            if (cam.extras) cam.extras->has_bbox = false;
+                            if (cam.extras) {
+                                cam.extras->has_bbox = false;
+                                cam.extras->absent = false;
+                            }
                             for (auto &kp : cam.keypoints) kp = Keypoint2D{};
                         }
                 if (save_gA(s, amap, {{0, 0}, {0, 1}, {1, 0}, {1, 1}}, {})) {
                     const auto I = row_set(d / "instances.pq");
                     CHECK(rows_where(I, {"group_id=gA"}).empty(),
-                          "every gA row goes, present and absent included");
+                          "every gA row goes once its boxes and absent marks are cleared");
                     CHECK(rows_where(I, {"group_id=gB"}) == rows_where(I0, {"group_id=gB"}),
                           "gB's instances are untouched");
                     const auto K = row_set(d / "keypoints.pq");

@@ -249,6 +249,7 @@ inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
                 ext.obb_h = h;
                 ext.obb_angle = img_angle;
                 ext.has_obb = true;
+                ext.absent = false;   // a box says it is here
             }
 
             state.draw_state = OBBDrawState::Idle;

@@ -120,6 +120,10 @@ inline bool point3d_row_loaded(const std::string &status, bool has_xyz) {
 inline bool instance_box_loaded(const std::string &status, bool nonempty_box) {
     return nonempty_box && (status == status::kLabeled || status == status::kPresent);
 }
+// An `absent` row becomes red's absent mark on that view.
+inline bool instance_absent_loaded(const std::string &status) {
+    return status == status::kAbsent;
+}
 
 } // namespace Tailcycle
 
