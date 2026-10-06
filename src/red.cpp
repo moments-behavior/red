@@ -1702,6 +1702,19 @@ int main(int argc, char **argv) {
                                     }
                                 } else {
                                     const auto &info = pm.annotation_config.label_info;
+                                    // Everyone at once: nobody is in this camera.
+                                    bool all = true;
+                                    for (auto &fa : it->second)
+                                        if (j < fa.cameras.size() && !fa.cameras[j].is_absent())
+                                            all = false;
+                                    if (ImGui::MenuItem("Mark all absent here", nullptr, false,
+                                                        !all))
+                                        for (auto &fa : it->second)
+                                            if (j < fa.cameras.size())
+                                                set_absent(fa.cameras[j], true);
+                                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                                        ImGui::SetTooltip("No animal is in this camera on this "
+                                                          "frame: every instance absent,\nits boxes here removed.");
                                     for (auto &fa : it->second) {
                                         if (j >= fa.cameras.size()) continue;
                                         auto &cam = fa.cameras[j];
