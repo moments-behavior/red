@@ -5,7 +5,7 @@
 // stored in the unified AnnotationMap (CameraAnnotation extras), on the
 // instance being edited, which takes the box's class (YOLO needs one per box;
 // ids stay unique across classes, so the CSVs need no class column). The class list is
-// pm.annotation_config.class_names, saved with the labels (annotations.json).
+// pm.annotation_config.box_classes, saved with the labels (annotations.json).
 
 #include "imgui.h"
 #include "implot.h"
@@ -42,28 +42,37 @@ struct BBoxToolState {
 
 // A class's colour, the same every session: the first cyan, the rest spread
 // round the hue circle by the golden ratio.
-inline ImVec4 box_class_color(int i) {
+inline ImVec4 default_box_class_color(int i) {
     if (i <= 0) return ImVec4(0.3f, 1.0f, 1.0f, 1.0f);
     float hue = i * 0.618033f;
     hue -= std::floor(hue);
     return (ImVec4)ImColor::HSV(hue, 0.85f, 0.95f);
 }
 
-inline const char *box_class_name(const std::vector<std::string> &classes, int i) {
-    return i >= 0 && i < (int)classes.size() ? classes[i].c_str() : "?";
+// A class's colour: the one picked for it, else its default.
+inline ImVec4 box_class_color(const BoxClasses &classes, int i) {
+    if (i >= 0 && classes.has_color((size_t)i)) {
+        const auto &c = classes.colors[(size_t)i];
+        return ImVec4(c[0], c[1], c[2], 1.0f);
+    }
+    return default_box_class_color(i);
+}
+
+inline const char *box_class_name(const BoxClasses &classes, int i) {
+    return i >= 0 && i < (int)classes.names.size() ? classes.names[i].c_str() : "?";
 }
 
 // Adds Class_<n>, n its index, to the list and makes it current.
-inline void add_box_class(BBoxToolState &state, std::vector<std::string> &classes) {
-    state.current_class = (int)classes.size();
-    classes.push_back("Class_" + std::to_string(classes.size()));
+inline void add_box_class(BBoxToolState &state, BoxClasses &classes) {
+    state.current_class = (int)classes.names.size();
+    classes.names.push_back("Class_" + std::to_string(classes.names.size()));
 }
 
 // The class a new box gets: the current one, after making Class_0 if the list
 // is empty (a new project's is).
-inline int box_class_for_new(BBoxToolState &state, std::vector<std::string> &classes) {
-    if (classes.empty()) add_box_class(state, classes);
-    state.current_class = std::clamp(state.current_class, 0, (int)classes.size() - 1);
+inline int box_class_for_new(BBoxToolState &state, BoxClasses &classes) {
+    if (classes.names.empty()) add_box_class(state, classes);
+    state.current_class = std::clamp(state.current_class, 0, (int)classes.names.size() - 1);
     return state.current_class;
 }
 
@@ -88,7 +97,7 @@ inline bool box_key(ImGuiKey k) {
 
 // Draw bbox rectangles on a camera's ImPlot view: every animal's.
 inline void bbox_draw_overlays(const BBoxToolState &state,
-                               const std::vector<std::string> &classes,
+                               const BoxClasses &classes,
                                const AnnotationMap &amap, u32 frame,
                                int cam_idx, int img_w, int img_h) {
     (void)img_w;
@@ -98,7 +107,7 @@ inline void bbox_draw_overlays(const BBoxToolState &state,
         double dxs[] = {state.start_x, mouse.x, mouse.x, state.start_x, state.start_x};
         double dys[] = {state.start_y, state.start_y, mouse.y, mouse.y, state.start_y};
         ImPlotSpec nspec;
-        nspec.LineColor = box_class_color(state.current_class);
+        nspec.LineColor = box_class_color(classes, state.current_class);
         ImPlot::PlotLine("##bbox_new", dxs, dys, 5, nspec);
     }
 
@@ -112,7 +121,7 @@ inline void bbox_draw_overlays(const BBoxToolState &state,
         if (!cam.has_bbox()) continue;
 
         const int ci = fa.category_id;
-        ImVec4 color = box_class_color(ci);
+        ImVec4 color = box_class_color(classes, ci);
         const bool hot = state.hovered && cam_idx == state.hovered_cam &&
                          (int)inst == state.hovered_instance;
         if (!hot) color.w *= 0.6f;
@@ -155,7 +164,8 @@ inline bool bbox_blocks_pan(const BBoxToolState &state) {
 // crosshairs with a small box beside them, in the class colour. Replaces
 // ImPlot's "not allowed" cursor, which it shows for a drag on the views
 // bbox_blocks_pan locks. Call inside the camera's plot.
-inline void bbox_draw_cursor(const BBoxToolState &state, int cam_idx) {
+inline void bbox_draw_cursor(const BBoxToolState &state,
+                             const BoxClasses &classes, int cam_idx) {
     if (!state.enabled) return;
     const bool here = state.drawing ? cam_idx == state.drawing_cam
                                     : ImGui::GetIO().KeyShift && ImPlot::IsPlotHovered();
@@ -165,7 +175,7 @@ inline void bbox_draw_cursor(const BBoxToolState &state, int cam_idx) {
     const ImVec2 m = ImGui::GetIO().MousePos;
     const ImVec2 lo = ImPlot::GetPlotPos();
     const ImVec2 hi(lo.x + ImPlot::GetPlotSize().x, lo.y + ImPlot::GetPlotSize().y);
-    const ImU32 col = ImGui::GetColorU32(box_class_color(state.current_class));
+    const ImU32 col = ImGui::GetColorU32(box_class_color(classes, state.current_class));
     const ImU32 cross = IM_COL32(255, 255, 255, 150);
     dl->PushClipRect(lo, hi, true);
     dl->AddLine(ImVec2(lo.x, m.y), ImVec2(m.x - 5, m.y), cross);
@@ -181,7 +191,7 @@ inline void bbox_draw_cursor(const BBoxToolState &state, int cam_idx) {
 
 // Handle bbox input on a focused camera view. Where a box goes: box_target.
 inline void bbox_handle_input(BBoxToolState &state,
-                              std::vector<std::string> &classes,
+                              BoxClasses &classes,
                               AnnotationMap &amap, u32 frame, int cam_idx,
                               int active_instance, int num_nodes,
                               int num_cameras, int img_w, int img_h) {
@@ -287,7 +297,7 @@ inline void bbox_handle_input(BBoxToolState &state,
     }
 
     // Z/X: previous / next class.
-    const int n = (int)classes.size();
+    const int n = (int)classes.names.size();
     if (n > 0 && box_key(ImGuiKey_Z))
         state.current_class = (state.current_class - 1 + n) % n;
     if (n > 0 && box_key(ImGuiKey_X))
@@ -298,7 +308,7 @@ inline void bbox_handle_input(BBoxToolState &state,
 inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
     DrawPanel("Bbox Tool", state.show,
         [&]() {
-        auto &classes = ctx.pm.annotation_config.class_names;
+        auto &classes = ctx.pm.annotation_config.box_classes;
         ImGui::Checkbox("Enable Bbox Drawing", &state.enabled);
         ImGui::Checkbox("Show IDs", &state.show_ids);
 
@@ -312,14 +322,36 @@ inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
 
         // Class list: saved with the labels.
         ImGui::SeparatorText("Classes");
-        if (classes.empty())
+        if (classes.names.empty())
             ImGui::TextDisabled("None yet -- the first box adds Class_0.");
         // One row per class: click to pick it, double-click to rename it in
         // place (YOLO export writes these names).
-        for (int i = 0; i < (int)classes.size(); ++i) {
+        for (int i = 0; i < (int)classes.names.size(); ++i) {
             ImGui::PushID(i);
-            ImGui::ColorButton("##clr", box_class_color(i),
-                               ImGuiColorEditFlags_NoTooltip, ImVec2(14, 14));
+            // Double-click the swatch to pick the class's colour.
+            ImVec4 col = box_class_color(classes, i);
+            ImGui::ColorButton("##clr", col, ImGuiColorEditFlags_NoTooltip,
+                               ImVec2(14, 14));
+            if (ImGui::IsItemHovered() &&
+                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                ImGui::OpenPopup("##pick_color");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+                ImGui::SetTooltip("Double-click to change the colour");
+            if (ImGui::BeginPopup("##pick_color")) {
+                if (ImGui::ColorPicker3("##picker", &col.x,
+                                        ImGuiColorEditFlags_NoSidePreview |
+                                            ImGuiColorEditFlags_NoSmallPreview)) {
+                    if (classes.colors.size() <= (size_t)i)
+                        classes.colors.resize((size_t)i + 1, {-1.f, -1.f, -1.f});
+                    classes.colors[(size_t)i] = {col.x, col.y, col.z};
+                }
+                if (ImGui::SmallButton("Default")) {
+                    if ((size_t)i < classes.colors.size())
+                        classes.colors[(size_t)i] = {-1.f, -1.f, -1.f};
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
             ImGui::SameLine();
             if (state.editing_class == i) {
                 ImGui::SetNextItemWidth(-FLT_MIN);
@@ -327,15 +359,15 @@ inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
                     ImGui::SetKeyboardFocusHere();
                     state.focus_edit = false;
                 }
-                ImGui::InputText("##name", &classes[(size_t)i],
+                ImGui::InputText("##name", &classes.names[(size_t)i],
                                  ImGuiInputTextFlags_AutoSelectAll);
                 if (ImGui::IsItemDeactivated()) {
-                    if (classes[(size_t)i].empty())   // keep a name to export
-                        classes[(size_t)i] = "Class_" + std::to_string(i);
+                    if (classes.names[(size_t)i].empty())   // keep a name to export
+                        classes.names[(size_t)i] = "Class_" + std::to_string(i);
                     state.editing_class = -1;
                 }
             } else {
-                if (ImGui::Selectable(classes[(size_t)i].c_str(),
+                if (ImGui::Selectable(classes.names[(size_t)i].c_str(),
                                       i == state.current_class,
                                       ImGuiSelectableFlags_AllowDoubleClick)) {
                     state.current_class = i;

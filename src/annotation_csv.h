@@ -190,7 +190,7 @@ inline std::string save_all(const std::string &root_dir, const std::string &skel
                              const AnnotationMap &amap, int num_cameras, int num_nodes,
                              const std::vector<std::string> &camera_names,
                              std::string *error = nullptr,
-                             const std::vector<std::string> *class_names = nullptr) {
+                             const BoxClasses *box_classes = nullptr) {
     // An empty root makes folder "/<timestamp>" -- a directory at the
     // filesystem root. A tailcycle session leaves keypoints_root_folder empty
     // on purpose (red must not write its CSVs into someone else's dataset), so
@@ -232,7 +232,7 @@ inline std::string save_all(const std::string &root_dir, const std::string &skel
     }
 
     // Save extended annotations (bbox, obb, mask) if any
-    save_annotations_json(amap, folder, class_names);
+    save_annotations_json(amap, folder, box_classes);
 
     return folder;
 }
@@ -402,7 +402,7 @@ inline bool load_2d_csv(const std::string &path, AnnotationMap &amap,
 inline int load_all(const std::string &folder, AnnotationMap &amap,
                      const std::string &skeleton_name, int num_nodes, int num_cameras,
                      const std::vector<std::string> &camera_names, std::string &error,
-                     std::vector<std::string> *class_names = nullptr) {
+                     BoxClasses *box_classes = nullptr) {
     namespace fs = std::filesystem;
 
     // Validate skeleton from 3D header
@@ -492,7 +492,7 @@ inline int load_all(const std::string &folder, AnnotationMap &amap,
     }
 
     // Load extended annotations (bbox, obb, mask) if present
-    load_annotations_json(amap, folder, class_names);
+    load_annotations_json(amap, folder, box_classes);
 
     return has_error ? 1 : 0;
 }

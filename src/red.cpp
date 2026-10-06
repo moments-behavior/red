@@ -1588,13 +1588,13 @@ int main(int argc, char **argv) {
 
                             // Bbox tool. Boxes go on the instance being
                             // edited, which takes the selected class.
-                            auto &box_classes = pm.annotation_config.class_names;
+                            auto &box_classes = pm.annotation_config.box_classes;
                             if (win.bbox.enabled) {
                                 bbox_handle_input(win.bbox, box_classes,
                                                   annotations, frame, j,
                                                   active_instance, nn, nc,
                                                   iw, ih);
-                                bbox_draw_cursor(win.bbox, j);
+                                bbox_draw_cursor(win.bbox, box_classes, j);
                             }
                             if (display.show_bboxes) {
                                 bbox_draw_overlays(win.bbox, box_classes,

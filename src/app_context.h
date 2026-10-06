@@ -351,7 +351,7 @@ inline void close_project(AppContext &ctx, bool save_labels = true) {
             ctx.skeleton.name, ctx.annotations,
             ctx.scene->num_cams, ctx.skeleton.num_nodes,
             ctx.pm.camera_names, &save_err,
-            &ctx.pm.annotation_config.class_names);
+            &ctx.pm.annotation_config.box_classes);
     }
 
     // 2. Save ImGui ini
@@ -535,7 +535,7 @@ inline void on_project_loaded(AppContext &ctx,
                                       ctx.skeleton.name,
                                       ctx.skeleton.num_nodes, num_cameras,
                                       ctx.pm.camera_names, label_err,
-                                      &ctx.pm.annotation_config.class_names)) {
+                                      &ctx.pm.annotation_config.box_classes)) {
             ctx.popups.pushError(label_err);
             ctx.annotations.clear();
         }
@@ -651,7 +651,7 @@ inline bool save_untitled_project(AppContext &ctx, const std::string &name,
         const std::string saved = AnnotationCSV::save_all(
             pm.keypoints_root_folder, ctx.skeleton.name, ctx.annotations,
             ctx.scene ? (int)ctx.scene->num_cams : 0, ctx.skeleton.num_nodes,
-            pm.camera_names, &e, &pm.annotation_config.class_names);
+            pm.camera_names, &e, &pm.annotation_config.box_classes);
         if (saved.empty()) return fail("Could not save the labels: " + e);
     }
 

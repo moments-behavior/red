@@ -697,11 +697,11 @@ static void test_bbox_next_class_color() {
 
     // Colours are valid and differ from class to class.
     for (int i = 0; i < 6; ++i) {
-        const ImVec4 c = box_class_color(i);
+        const ImVec4 c = default_box_class_color(i);
         EXPECT_TRUE(c.x >= 0 && c.x <= 1 && c.y >= 0 && c.y <= 1 &&
                     c.z >= 0 && c.z <= 1 && c.w >= 0 && c.w <= 1);
         if (i > 0) {
-            const ImVec4 p = box_class_color(i - 1);
+            const ImVec4 p = default_box_class_color(i - 1);
             EXPECT_TRUE(fabs(c.x - p.x) > 0.01 || fabs(c.y - p.y) > 0.01 ||
                         fabs(c.z - p.z) > 0.01);
         }
@@ -713,12 +713,12 @@ static void test_bbox_classes_and_target() {
 
     // The first box of a project with no classes makes Class_0.
     BBoxToolState state;
-    std::vector<std::string> classes;
+    BoxClasses classes;
     EXPECT_EQ(box_class_for_new(state, classes), 0);
-    EXPECT_EQ((int)classes.size(), 1);
-    EXPECT_TRUE(classes[0] == "Class_0");
+    EXPECT_EQ((int)classes.names.size(), 1);
+    EXPECT_TRUE(classes.names[0] == "Class_0");
     add_box_class(state, classes);
-    EXPECT_TRUE(classes[1] == "Class_1");
+    EXPECT_TRUE(classes.names[1] == "Class_1");
     EXPECT_EQ(state.current_class, 1);
 
     // A box goes on the instance being edited, not the frame's first.
@@ -743,7 +743,7 @@ static void test_annotation_config_defaults() {
     EXPECT_TRUE(cfg.enable_keypoints);
     EXPECT_FALSE(cfg.enable_bboxes);
     EXPECT_FALSE(cfg.enable_obbs);
-    EXPECT_TRUE(cfg.class_names.empty());   // the first box adds Class_0
+    EXPECT_TRUE(cfg.box_classes.names.empty());   // the first box adds Class_0
 }
 
 static void test_annotation_config_json_roundtrip() {
@@ -752,7 +752,7 @@ static void test_annotation_config_json_roundtrip() {
     AnnotationConfig cfg;
     cfg.enable_bboxes = true;
     cfg.enable_obbs = true;
-    cfg.class_names = {"rat", "mouse", "fly"};
+    cfg.box_classes.names = {"rat", "mouse", "fly"};
 
     nlohmann::json j;
     to_json(j, cfg);
@@ -765,17 +765,17 @@ static void test_annotation_config_json_roundtrip() {
     EXPECT_TRUE(cfg2.enable_obbs);
     // Box classes are saved with the labels, not the project file ...
     EXPECT_FALSE(j.contains("class_names"));
-    EXPECT_TRUE(cfg2.class_names.empty());
+    EXPECT_TRUE(cfg2.box_classes.names.empty());
     // ... but an older project's are still read.
     j["class_names"] = {"rat", "mouse"};
     AnnotationConfig cfg3;
     from_json(j, cfg3);
-    EXPECT_EQ((int)cfg3.class_names.size(), 2);
+    EXPECT_EQ((int)cfg3.box_classes.names.size(), 2);
     // The old automatic default is not a class anyone chose.
     j["class_names"] = {"animal"};
     AnnotationConfig cfg4;
     from_json(j, cfg4);
-    EXPECT_TRUE(cfg4.class_names.empty());
+    EXPECT_TRUE(cfg4.box_classes.names.empty());
 }
 
 // Box class names round-trip through annotations.json with the boxes.
@@ -791,22 +791,28 @@ static void test_annotations_json_class_names() {
     fa.category_id = 1;
     auto &e = fa.cameras[0].get_extras();
     e.bbox_x = 1; e.bbox_y = 2; e.bbox_w = 30; e.bbox_h = 40; e.has_bbox = true;
-    const std::vector<std::string> classes = {"Class_0", "rat"};
+    BoxClasses classes;
+    classes.names = {"Class_0", "rat"};
+    classes.colors = {{-1.f, -1.f, -1.f}, {0.5f, 0.25f, 1.0f}};   // rat's picked
     EXPECT_TRUE(save_annotations_json(amap, dir.string(), &classes));
 
     AnnotationMap back;
     get_or_create_frame(back, 3, 2, 1, 4);   // as the CSV loader would
-    std::vector<std::string> names = {"old"};
-    EXPECT_TRUE(load_annotations_json(back, dir.string(), &names));
-    EXPECT_TRUE(names == classes);
+    BoxClasses loaded;
+    loaded.names = {"old"};
+    EXPECT_TRUE(load_annotations_json(back, dir.string(), &loaded));
+    EXPECT_TRUE(loaded.names == classes.names);
+    EXPECT_FALSE(loaded.has_color(0));
+    EXPECT_TRUE(loaded.has_color(1) && loaded.colors[1][1] == 0.25f);
     EXPECT_EQ(back[3].front().category_id, 1);
     EXPECT_TRUE(back[3].front().cameras[0].has_bbox());
 
     // A file without categories leaves the caller's list alone.
-    std::vector<std::string> kept = {"animal"};
+    BoxClasses kept;
+    kept.names = {"animal"};
     EXPECT_TRUE(save_annotations_json(amap, dir.string()));
     EXPECT_TRUE(load_annotations_json(back, dir.string(), &kept));
-    EXPECT_TRUE(kept == std::vector<std::string>{"animal"});
+    EXPECT_TRUE(kept.names == std::vector<std::string>{"animal"});
     fs::remove_all(dir);
 }
 
@@ -825,7 +831,7 @@ static void test_annotation_config_backward_compat() {
     // Should have defaults
     EXPECT_TRUE(cfg.enable_keypoints);
     EXPECT_FALSE(cfg.enable_bboxes);
-    EXPECT_TRUE(cfg.class_names.empty());
+    EXPECT_TRUE(cfg.box_classes.names.empty());
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

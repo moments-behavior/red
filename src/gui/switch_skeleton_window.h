@@ -51,7 +51,7 @@ inline bool switch_project_skeleton(AppContext &ctx,
         AnnotationCSV::save_all(pm.keypoints_root_folder, ctx.skeleton.name,
                                 ctx.annotations, ctx.scene->num_cams,
                                 ctx.skeleton.num_nodes, pm.camera_names, &save_err,
-                                &pm.annotation_config.class_names);
+                                &pm.annotation_config.box_classes);
     }
 
     pm.load_skeleton_from_json = new_load_from_json;

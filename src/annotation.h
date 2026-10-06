@@ -12,6 +12,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <array>
 #include <vector>
 #include <filesystem>
 #include <fstream>
@@ -271,6 +272,18 @@ struct FrameAnnotation {
 
     // Per-camera 2D annotations
     std::vector<CameraAnnotation> cameras; // [num_cameras]
+};
+
+// ── Box classes ──
+// The Bbox tool's classes, by number (FrameAnnotation::category_id): names,
+// and colours where the user picked one. Saved with the boxes in
+// annotations.json ("categories", "category_colors").
+struct BoxClasses {
+    std::vector<std::string> names;
+    // Parallel to names; may be shorter. {-1,...} or missing = the default
+    // colour for that class number.
+    std::vector<std::array<float, 3>> colors;
+    bool has_color(size_t i) const { return i < colors.size() && colors[i][0] >= 0; }
 };
 
 // ── The main annotation container ──
@@ -717,12 +730,25 @@ inline void annotations_from_json(const nlohmann::json &root, AnnotationMap &ama
 
 // Save extended annotations to a JSON file alongside keypoint CSVs
 inline bool save_annotations_json(const AnnotationMap &amap, const std::string &folder,
-                                  const std::vector<std::string> *class_names = nullptr) {
+                                  const BoxClasses *classes = nullptr) {
     auto j = annotations_to_json(amap);
     // The box classes, by number: what each record's category_id means. Kept
     // with the boxes so the labels say what they are on their own.
-    const bool have_classes = class_names && !class_names->empty();
-    if (have_classes) j["categories"] = *class_names;
+    const bool have_classes = classes && !classes->names.empty();
+    if (have_classes) {
+        j["categories"] = classes->names;
+        bool any_color = false;
+        for (size_t i = 0; i < classes->names.size(); ++i)
+            any_color = any_color || classes->has_color(i);
+        if (any_color) {
+            nlohmann::json cols = nlohmann::json::array();
+            for (size_t i = 0; i < classes->names.size(); ++i)
+                cols.push_back(classes->has_color(i)
+                                   ? nlohmann::json(classes->colors[i])
+                                   : nlohmann::json(nullptr));
+            j["category_colors"] = cols;   // [r,g,b] in 0..1, or null
+        }
+    }
     if (j["frames"].empty() && !have_classes) return true; // nothing to save
     std::ofstream f(folder + "/annotations.json");
     if (!f) return false;
@@ -731,10 +757,10 @@ inline bool save_annotations_json(const AnnotationMap &amap, const std::string &
 }
 
 // Load extended annotations from JSON (call after loading keypoint CSVs)
-// class_names, if given, gets the file's box classes -- left alone when the
+// classes, if given, gets the file's box classes -- left alone when the
 // file has none (labels from before they were kept here).
 inline bool load_annotations_json(AnnotationMap &amap, const std::string &folder,
-                                  std::vector<std::string> *class_names = nullptr) {
+                                  BoxClasses *classes = nullptr) {
     std::string path = folder + "/annotations.json";
     if (!std::filesystem::exists(path)) return true; // no extended data, ok
     try {
@@ -742,8 +768,17 @@ inline bool load_annotations_json(AnnotationMap &amap, const std::string &folder
         nlohmann::json j;
         f >> j;
         annotations_from_json(j, amap);
-        if (class_names && j.contains("categories") && j["categories"].is_array())
-            *class_names = j["categories"].get<std::vector<std::string>>();
+        if (classes && j.contains("categories") && j["categories"].is_array()) {
+            classes->names = j["categories"].get<std::vector<std::string>>();
+            classes->colors.clear();
+            if (j.contains("category_colors") && j["category_colors"].is_array())
+                for (const auto &c : j["category_colors"])
+                    classes->colors.push_back(
+                        c.is_array() && c.size() == 3
+                            ? std::array<float, 3>{c[0].get<float>(), c[1].get<float>(),
+                                                   c[2].get<float>()}
+                            : std::array<float, 3>{-1.f, -1.f, -1.f});
+        }
         return true;
     } catch (...) {
         return false;
