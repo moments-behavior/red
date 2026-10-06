@@ -73,6 +73,9 @@ set(DIR_HTTPLIB "${CMAKE_SOURCE_DIR}/lib/httplib")
 set(DIR_MINIZ   "${CMAKE_SOURCE_DIR}/lib/miniz")
 set(MINIZ_SRC   "${DIR_MINIZ}/miniz.c")   # C source: project() lists C below
 
+# ImGuiFileDialog reads red's settings (src/gui/igfd_config.h) in place of its own.
+add_compile_definitions(CUSTOM_IMGUIFILEDIALOG_CONFIG="${CMAKE_SOURCE_DIR}/src/gui/igfd_config.h")
+
 # red's version, shown in Help > About: a release tag when the build is exactly
 # at one, else <branch>-<commit>, with -dirty for uncommitted changes -- the
 # same names the packaging scripts give their zips. Taken at configure time;

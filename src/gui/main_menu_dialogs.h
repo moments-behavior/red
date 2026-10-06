@@ -187,17 +187,18 @@ inline void HandleMainMenuDialogs(
         ImGui::EndPopup();
     }
 
-    // Save Project: one file browser -- pick the folder, keep or change the
-    // name. The project goes in a new folder <folder>/<name>/ holding
+    // Save Project: one file browser -- go to where the project should live,
+    // keep or change the folder name. Makes <there>/<name>/ holding
     // <name>.redproj and labeled_data/.
     auto open_save_dialog = [&](const std::string &dir, const std::string &name) {
         IGFD::FileDialogConfig cfg;
         cfg.path = dir;
         cfg.fileName = name;
-        cfg.flags = ImGuiFileDialogFlags_Modal;
+        cfg.flags = ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_HideColumnType;
+        // No filter (""): no type list beside the name. Not nullptr, which
+        // would make it a folder picker that names the clicked folder.
         ImGuiFileDialog::Instance()->OpenDialog(
-            "SaveUntitledProject", "Save Project (makes a folder with this name)",
-            ".redproj", cfg);
+            "SaveUntitledProject", "Save Project", "", cfg);
     };
     if (ctx.save_project_prompt) {
         ctx.save_project_prompt = false;
@@ -207,15 +208,15 @@ inline void HandleMainMenuDialogs(
                 ? std::string("Untitled")
                 : std::filesystem::path(pm.media_folder).filename().string());
     }
-    if (ImGuiFileDialog::Instance()->Display("SaveUntitledProject",
-                                             ImGuiWindowFlags_NoCollapse,
-                                             ImVec2(680, 440))) {
+    igfd_file_name_label() = "Folder Name:";
+    const bool save_done = ImGuiFileDialog::Instance()->Display(
+        "SaveUntitledProject", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440));
+    igfd_file_name_label() = "File Name:";
+    if (save_done) {
         if (ImGuiFileDialog::Instance()->IsOk()) {
             const std::string dir = ImGuiFileDialog::Instance()->GetCurrentPath();
-            std::string name = ImGuiFileDialog::Instance()->GetCurrentFileName(
+            const std::string name = ImGuiFileDialog::Instance()->GetCurrentFileName(
                 IGFD_ResultMode_KeepInputFile);
-            if (ends_with_ci(name, ".redproj"))
-                name.resize(name.size() - 8);
             ImGuiFileDialog::Instance()->Close();
             std::string err;
             if (save_untitled_project(ctx, name, dir, &err)) {
