@@ -295,10 +295,13 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
                                        calibration_folder_kind(), cfg);
                 }
             }
-            // Camera timestamps (optional, several video cameras): where the
-            // per-camera timestamp files are, for the desync fix and Frame
-            // Drops. red does not look for them anywhere else.
-            if (n_sel > 1 && state.media_kind == MediaKind::Video) {
+            // Camera timestamps (optional; calibrated video cameras, which
+            // record the same moments together): where the per-camera
+            // timestamp files are, for the desync fix and Frame Drops. A 2D
+            // project's cameras are separate videos with their own timelines.
+            // red does not look for them anywhere else.
+            if (n_sel > 1 && !state.two_d_mode &&
+                state.media_kind == MediaKind::Video) {
                 auto [edited, browse] = path_row("Timestamps", "##annot_timestamps",
                                                  &pm.timestamps_folder, "optional",
                                                  "Browse##annot_timestamps");
