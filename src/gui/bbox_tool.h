@@ -174,9 +174,10 @@ inline FrameAnnotation &box_target(AnnotationMap &amap, u32 frame, int cam_idx,
                                    int &active_instance, int num_nodes,
                                    int num_cameras, HasBox has) {
     auto it = amap.find(frame);
-    if (it == amap.end() || it->second.empty()) {
-        // A new frame starts with its neighbours' instances; the box goes on
-        // the one being edited (same place in the list), else the first.
+    if (it == amap.end() || !any_instance_has_labels(it->second)) {
+        // A new frame (or one of only empty instances) starts with the
+        // nearest labelled frame's instances; the box goes on the one being
+        // edited (same place in the list), else the first.
         FrameInstances &fis =
             create_frame_instances(amap, frame, num_nodes, num_cameras);
         if (active_instance < 0 || active_instance >= (int)fis.size()) active_instance = 0;

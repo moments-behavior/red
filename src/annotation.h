@@ -504,12 +504,13 @@ inline bool any_instance_has_manual_labels(const FrameInstances &fis) {
 // later (the closer; earlier on a tie): its animals (ids and classes, in
 // order), all unlabelled here -- else just instance 0. A frame with only
 // empty instances does not count. Labelling five animals then moving on keeps
-// five, at the same places in the list. A frame that already has instances
-// is returned as it is.
+// five, at the same places in the list. A frame with real labels is returned
+// as it is; one with only empty instances (saved from an earlier visit) is
+// topped up with the animals it lacks, keeping those it has.
 inline FrameInstances &create_frame_instances(AnnotationMap &amap, u32 frame,
                                               int num_nodes, int num_cameras) {
     auto here = amap.find(frame);
-    if (here != amap.end() && !here->second.empty()) return here->second;
+    if (here != amap.end() && any_instance_has_labels(here->second)) return here->second;
     const FrameInstances *before = nullptr, *after = nullptr;
     u32 f_before = 0, f_after = 0;
     for (auto it = amap.lower_bound(frame); it != amap.begin();) {
@@ -526,7 +527,8 @@ inline FrameInstances &create_frame_instances(AnnotationMap &amap, u32 frame,
     if (ids.empty()) ids.push_back({0, 0});
     FrameInstances &fis = amap[frame];
     for (const auto &[id, cat] : ids)
-        fis.push_back(make_frame(num_nodes, num_cameras, frame, id, cat));
+        if (!find_instance(fis, id))
+            fis.push_back(make_frame(num_nodes, num_cameras, frame, id, cat));
     return fis;
 }
 

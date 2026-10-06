@@ -1027,6 +1027,48 @@ static void test_bbox_ui_drag_corner() {
     EXPECT_NEAR((kH - e.bbox_y), 300, 1e-6);                    // top unchanged
 }
 
+// The first box on a frame starts it with the nearest labelled frame's
+// instances, as B does.
+static void test_bbox_ui_first_box_copies_instances() {
+    printf("  test_bbox_ui_first_box_copies_instances...\n");
+    using namespace bbox_ui;
+    Headless ui;
+    BBoxToolState st;
+    LabelInfo info;
+    AnnotationMap amap = one_box();                      // frame 0: #0 boxed
+    {
+        get_or_create_frame(amap, 0, 1, 1, 1);
+        auto &e = find_instance(amap[0], 1)->cameras[0].get_extras();
+        e.bbox_x = 400; e.bbox_y = 100; e.bbox_w = 50; e.bbox_h = 50; e.has_bbox = true;
+    }
+    int active = 1;
+    auto input = [&] { bbox_handle_input(st, info, amap, 1, 0, active, 1, 1, kW, kH); };
+    const ImVec2 a = px(st, 150, 250), b = px(st, 250, 150);
+    frame(st, a, false, true, input);
+    frame(st, a, false, true, input);
+    frame(st, a, true, true, input);
+    frame(st, b, true, true, input);
+    frame(st, b, false, true, input);
+    EXPECT_TRUE(amap.count(1) && amap[1].size() == 2);
+    if (amap.count(1) && amap[1].size() == 2) {
+        EXPECT_TRUE(amap[1][1].instance_id == 1 && amap[1][1].cameras[0].has_bbox());
+        EXPECT_FALSE(amap[1][0].cameras[0].has_bbox());
+    }
+
+    // A frame holding only an empty #0 (saved from an earlier visit) counts
+    // as new: the first box tops it up with #1.
+    get_or_create_frame(amap, 2, 1, 1, 0);
+    active = 1;
+    auto input2 = [&] { bbox_handle_input(st, info, amap, 2, 0, active, 1, 1, kW, kH); };
+    frame(st, a, false, true, input2);
+    frame(st, a, false, true, input2);
+    frame(st, a, true, true, input2);
+    frame(st, b, true, true, input2);
+    frame(st, b, false, true, input2);
+    EXPECT_TRUE(amap[2].size() == 2 && find_instance(amap[2], 1) &&
+                find_instance(amap[2], 1)->cameras[0].has_bbox());
+}
+
 int main() {
     test_current_date_time();
 
@@ -1044,6 +1086,7 @@ int main() {
     test_bbox_ui_drag_edge_and_label();
     test_bbox_ui_right_click_menu();
     test_bbox_ui_drag_corner();
+    test_bbox_ui_first_box_copies_instances();
     test_reprojection_error_colors();
 
     // Transport bar + UI overhaul tests
