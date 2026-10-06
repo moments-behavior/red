@@ -149,11 +149,20 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     snprintf(state.tailcycle_session_id,
                              sizeof(state.tailcycle_session_id), "%s",
                              pm.project_name.c_str());
+                // One folder name: a / or \\ would nest folders, which no
+                // tailcycle reader finds, so they become _ as they are typed.
                 ImGui::InputText("Session ID", state.tailcycle_session_id,
-                                 sizeof(state.tailcycle_session_id));
+                                 sizeof(state.tailcycle_session_id),
+                                 ImGuiInputTextFlags_CallbackCharFilter,
+                                 [](ImGuiInputTextCallbackData *d) {
+                                     if (d->EventChar == '/' || d->EventChar == '\\')
+                                         d->EventChar = '_';
+                                     return 0;
+                                 });
                 ImGui::SetItemTooltip(
-                    "Becomes the folder name, which IS the session id. Shared by "
-                    "every row below -- the split directory keeps them apart.");
+                    "Becomes the folder name, which IS the session id (one name: / "
+                    "becomes _). Shared by every row below -- the split directory "
+                    "keeps them apart.");
             }
 
             ImGui::SeparatorText("Splits");
@@ -476,7 +485,11 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
 
                     std::vector<ExportWindowState::TailcycleRange> tc_rows;
                     if (dispatch_fmt == ExportFormats::TAILCYCLE) {
+                        // One folder name, whatever it came from (a typed
+                        // one is already clean; a project name may not be).
                         ecfg.tailcycle_session_id = state.tailcycle_session_id;
+                        for (char &ch : ecfg.tailcycle_session_id)
+                            if (ch == '/' || ch == '\\') ch = '_';
                         ecfg.tailcycle_layers = state.tailcycle_layers;
                         ecfg.tailcycle_window =
                             state.tailcycle_around_labels ? state.tailcycle_window : 0;
