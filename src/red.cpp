@@ -1021,6 +1021,15 @@ int main(int argc, char **argv) {
                 current_frame_num = dc_context->total_num_frame - 1;
         }
 
+        // A frame change starts with the first instance selected.
+        {
+            static int last_frame = -1;
+            if (current_frame_num != last_frame) {
+                last_frame = current_frame_num;
+                active_instance = 0;
+            }
+        }
+
         DrawFrameBufferWindow(ctx, select_corr_head);
 
         // Render a video frame
