@@ -106,6 +106,10 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             ImGui::BeginDisabled(is_2d);
             format_item("Nerfstudio / 3DGS...", ExportFormats::NERFSTUDIO);
             ImGui::EndDisabled();
+            if (is_2d && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Needs a calibrated project: Nerfstudio / 3DGS "
+                                  "takes the cameras'\npositions and lenses from "
+                                  "its calibration.");
             ImGui::Separator();
             // A standalone multi-dataset merge: works with no project open.
             if (ImGui::MenuItem("Group JARVIS (several projects)..."))
