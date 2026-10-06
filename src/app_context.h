@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -99,6 +100,9 @@ struct AppContext {
     bool unsaved_prompt = false;             // open that prompt next frame
     std::function<void()> after_save_action; // run once Save Project has saved
     bool save_project_prompt = false;        // open Save Project next frame
+    // The labels as last loaded or saved: what "unsaved changes" is measured
+    // against (labels_unsaved).
+    AnnotationMap saved_annotations;
 
     // Skeleton Creator, reached from the forms that pick a skeleton: a request
     // to open it, and each skeleton it saves (the serial counts saves, so a
@@ -391,16 +395,63 @@ inline void switch_ini_to_project(AppContext &ctx) {
 // Close project: auto-save, unload media, reset all project state.
 // save_labels=false discards label edits since the last save -- for a reload
 // the user chose to make without saving (Project > Camera Timestamps).
-inline void close_project(AppContext &ctx, bool save_labels = true) {
-    // 1. Auto-save annotations if project is loaded
+// Whether two sets of labels hold the same: every frame's 2D keypoints and
+// boxes (and absent marks) per camera, and 3D. An instance with nothing on it
+// is the same as no instance.
+inline bool annotations_match(const AnnotationMap &a, const AnnotationMap &b,
+                              int num_cameras) {
+    std::set<u32> frames;
+    for (const auto &[f, fis] : a) frames.insert(f);
+    for (const auto &[f, fis] : b) frames.insert(f);
+    for (u32 f : frames) {
+        auto ia = a.find(f), ib = b.find(f);
+        const FrameInstances *pa = ia == a.end() ? nullptr : &ia->second;
+        const FrameInstances *pb = ib == b.end() ? nullptr : &ib->second;
+        for (int c = 0; c < num_cameras; ++c)
+            if (!view_labels_equal(pa, pb, (size_t)c)) return false;
+        if (!frame_3d_equal(pa, pb)) return false;
+    }
+    return true;
+}
+
+// The labels on screen are now what is on disk.
+inline void mark_labels_saved(AppContext &ctx) { ctx.saved_annotations = ctx.annotations; }
+
+// Labels that quitting or opening something else would lose: an Untitled
+// project's (it has nowhere to keep them yet), or changes to a saved
+// project's since they were loaded or saved. A tailcycle session has no red
+// label folder -- it saves back to its own tables -- and is not asked about.
+inline bool labels_unsaved(const AppContext &ctx) {
+    if (ctx.pm.untitled) return !ctx.annotations.empty();
+    if (ctx.pm.keypoints_root_folder.empty()) return false;
+    return !annotations_match(ctx.annotations, ctx.saved_annotations,
+                              ctx.scene ? (int)ctx.scene->num_cams : 0);
+}
+inline bool untitled_unsaved(const AppContext &ctx) { return labels_unsaved(ctx); }
+
+// Write the labels to the project's label folder (a new timestamped one, as
+// Save does), and count them as saved.
+inline bool save_labels_now(AppContext &ctx, std::string *err) {
+    if (ctx.pm.keypoints_root_folder.empty()) {
+        if (err) *err = "This project has no label folder.";
+        return false;
+    }
+    const std::string folder = AnnotationCSV::save_all(
+        ctx.pm.keypoints_root_folder, ctx.skeleton.name, ctx.annotations,
+        ctx.scene ? (int)ctx.scene->num_cams : 0, ctx.skeleton.num_nodes,
+        ctx.pm.camera_names, err, &ctx.pm.annotation_config.label_info);
+    if (folder.empty()) return false;
+    mark_labels_saved(ctx);
+    return true;
+}
+
+inline void close_project(AppContext &ctx, bool save_labels = false) {
+    // 1. Labels are saved only when asked to: whoever closes the project has
+    // already asked the user (run_or_confirm_unsaved), or was told to save.
     if (save_labels && !ctx.pm.keypoints_root_folder.empty() &&
         !ctx.annotations.empty()) {
         std::string save_err;
-        AnnotationCSV::save_all(ctx.pm.keypoints_root_folder,
-            ctx.skeleton.name, ctx.annotations,
-            ctx.scene->num_cams, ctx.skeleton.num_nodes,
-            ctx.pm.camera_names, &save_err,
-            &ctx.pm.annotation_config.label_info);
+        save_labels_now(ctx, &save_err);
     }
 
     // 2. Save ImGui ini
@@ -590,6 +641,7 @@ inline void on_project_loaded(AppContext &ctx,
             ctx.annotations.clear();
         }
     }
+    mark_labels_saved(ctx);   // as loaded: nothing unsaved yet
     const double t_labels = load_timing::ms(t_stage);
 
     if (load_timing::enabled())
@@ -632,17 +684,13 @@ inline void on_project_loaded(AppContext &ctx,
 // ---------------------------------------------------------------------------
 
 // Labels that exist nowhere on disk.
-inline bool untitled_unsaved(const AppContext &ctx) {
-    return ctx.pm.untitled && !ctx.annotations.empty();
-}
-
 // Run `action` -- which replaces the current project or quits -- now, or, if
-// that would drop an Untitled project's labels, once the user has chosen in
+// that would lose unsaved labels (labels_unsaved), once the user has chosen in
 // the Save / Don't Save / Cancel prompt (HandleMainMenuDialogs). Don't Save
-// clears the labels before running it, and Save runs it after the save, so an
+// drops the changes before running it, and Save runs it after the save, so an
 // action that guards itself with this passes the second time through.
 inline void run_or_confirm_unsaved(AppContext &ctx, std::function<void()> action) {
-    if (!untitled_unsaved(ctx)) {
+    if (!labels_unsaved(ctx)) {
         action();
         return;
     }
@@ -708,6 +756,7 @@ inline bool save_untitled_project(AppContext &ctx, const std::string &name,
             pm.camera_names, &e, &pm.annotation_config.label_info);
         if (saved.empty()) return fail("Could not save the labels: " + e);
     }
+    mark_labels_saved(ctx);
 
     ctx.user_settings.push_recent_project(redproj);
     ctx.user_settings.last_project_root = location;

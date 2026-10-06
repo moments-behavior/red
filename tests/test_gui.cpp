@@ -1142,6 +1142,24 @@ static void test_reproj_threshold_bar() {
     EXPECT_NEAR(good, bad, 0.2);
 }
 
+// Unsaved-changes detection: the same labels match, an edit does not, and an
+// empty instance is the same as none.
+static void test_annotations_match() {
+    printf("  test_annotations_match...\n");
+    AnnotationMap a;
+    auto &kp = get_or_create_frame(a, 3, 2, 2).cameras[0].keypoints[0];
+    kp.x = 10; kp.y = 20; kp.set_manual();
+    AnnotationMap b = a;
+    EXPECT_TRUE(annotations_match(a, b, 2));
+    b[3].front().cameras[0].keypoints[0].x = 11;          // moved
+    EXPECT_FALSE(annotations_match(a, b, 2));
+    b = a;
+    get_or_create_frame(b, 9, 2, 2);                      // an empty frame
+    EXPECT_TRUE(annotations_match(a, b, 2));
+    set_absent(b[9].front().cameras[1], true);            // a new absent mark
+    EXPECT_FALSE(annotations_match(a, b, 2));
+}
+
 int main() {
     test_current_date_time();
 
@@ -1162,6 +1180,7 @@ int main() {
     test_bbox_ui_first_box_copies_instances();
     test_reprojection_error_colors();
     test_reproj_threshold_bar();
+    test_annotations_match();
 
     // Transport bar + UI overhaul tests
     test_transport_bar_state_defaults();

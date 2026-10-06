@@ -393,6 +393,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                             skeleton.num_nodes, pm.camera_names, &save_err,
                             &pm.annotation_config.label_info);
                         if (!saved.empty()) {
+                            mark_labels_saved(ctx);
                             // Update label folder to the freshly saved one
                             state.label_folder = saved;
                             state.label_display =

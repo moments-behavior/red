@@ -18,9 +18,9 @@ inline void load_project_from_path(
     std::function<void()> nuke_inference_fn = nullptr) {
     auto &pm = ctx.pm;
 
-    // Opening another project replaces an Untitled one: ask about its
-    // unsaved labels first. The prompt calls back here once settled.
-    if (untitled_unsaved(ctx)) {
+    // Opening another project replaces this one: ask about unsaved labels
+    // first. The prompt calls back here once settled.
+    if (labels_unsaved(ctx)) {
         run_or_confirm_unsaved(ctx, [&ctx, &win, cfg_path, print_metadata_fn,
                                      print_summary_fn, nuke_inference_fn]() {
             load_project_from_path(ctx, win, cfg_path, print_metadata_fn,
@@ -79,10 +79,9 @@ inline void load_project_from_path(
         ctx.popups.pushError(err);
         return;
     }
-    // Read before win.reset(), which clears it.
-    const bool save_labels = !win.load_project_discard_labels;
-    win.load_project_discard_labels = false;
-    close_project(ctx, save_labels);
+    // Any save was settled before this point (the prompt above, or the
+    // Camera Timestamps choice), so closing does not write labels.
+    close_project(ctx, false);
     win.reset();
     if (nuke_inference_fn) nuke_inference_fn();
     pm = loaded;
@@ -163,20 +162,41 @@ inline void HandleMainMenuDialogs(
     }
     if (ImGui::BeginPopupModal("Unsaved Project##unsaved", nullptr,
                                ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextUnformatted("This Untitled project has labels that have "
-                               "not been saved.");
+        ImGui::TextUnformatted(pm.untitled
+                                   ? "This Untitled project has labels that have "
+                                     "not been saved."
+                                   : "This project has label changes that have "
+                                     "not been saved.");
         ImGui::Spacing();
-        if (ImGui::Button("Save...")) {
-            ctx.after_save_action = std::move(ctx.unsaved_action);
-            ctx.unsaved_action = nullptr;
-            ctx.save_project_prompt = true;
-            ImGui::CloseCurrentPopup();
+        // Untitled: name it first (Save Project), then go on. Saved before:
+        // write the labels now, then go on.
+        if (ImGui::Button(pm.untitled ? "Save..." : "Save")) {
+            if (pm.untitled) {
+                ctx.after_save_action = std::move(ctx.unsaved_action);
+                ctx.unsaved_action = nullptr;
+                ctx.save_project_prompt = true;
+                ImGui::CloseCurrentPopup();
+            } else {
+                std::string err;
+                if (save_labels_now(ctx, &err)) {
+                    auto action = std::move(ctx.unsaved_action);
+                    ctx.unsaved_action = nullptr;
+                    ImGui::CloseCurrentPopup();
+                    if (action) action();
+                } else {
+                    ctx.unsaved_action = nullptr;
+                    ImGui::CloseCurrentPopup();
+                    ctx.popups.pushError("Could not save the labels: " + err);
+                }
+            }
         }
         ImGui::SameLine();
         if (ImGui::Button("Don't Save")) {
             auto action = std::move(ctx.unsaved_action);
             ctx.unsaved_action = nullptr;
-            ctx.annotations.clear();   // dropped: the action now goes through
+            // Dropped: the changes are let go, and the action now goes through.
+            if (pm.untitled) ctx.annotations.clear();
+            else mark_labels_saved(ctx);
             ImGui::CloseCurrentPopup();
             if (action) action();
         }
@@ -329,8 +349,14 @@ inline void HandleMainMenuDialogs(
                 pm.project_path + "/" + pm.project_name + ".redproj";
             std::string save_err;
             if (save_project_manager_json(pm, redproj, &save_err)) {
-                win.load_project_request = redproj;  // main loop reopens it
-                win.load_project_discard_labels = !save_labels;
+                // Settle the labels here, as chosen, so reopening does not ask.
+                std::string err;
+                if (save_labels && !save_labels_now(ctx, &err))
+                    ctx.popups.pushError("Could not save the labels: " + err);
+                else {
+                    if (!save_labels) mark_labels_saved(ctx);   // let go
+                    win.load_project_request = redproj;  // main loop reopens it
+                }
             } else {
                 ctx.popups.pushError("Could not save the project: " + save_err);
             }

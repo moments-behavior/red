@@ -63,6 +63,7 @@ inline bool switch_project_skeleton(AppContext &ctx,
 
     // Clear everything indexed by the old skeleton's node layout.
     ctx.annotations.clear();
+    mark_labels_saved(ctx);   // nothing left that is unsaved
 
     // Persist immediately — no explicit "Save Project" step, matching
     // transport_bar.h's sync_fix_enabled toggle.

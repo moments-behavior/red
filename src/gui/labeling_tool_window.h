@@ -1096,6 +1096,7 @@ inline void DrawLabelingToolWindow(
             toasts.pushError("Save failed: " + save_err);
         } else {
             state.last_saved = time(NULL);
+            mark_labels_saved(ctx);
             toasts.pushSuccess("Labels saved");
         }
     }

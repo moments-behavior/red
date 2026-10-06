@@ -461,7 +461,7 @@ int main(int argc, char **argv) {
     static AppContext *quit_guard_ctx = nullptr;
     quit_guard_ctx = &ctx;
     glfwSetWindowCloseCallback(window->render_target, [](GLFWwindow *w) {
-        if (!quit_guard_ctx || !untitled_unsaved(*quit_guard_ctx)) return;
+        if (!quit_guard_ctx || !labels_unsaved(*quit_guard_ctx)) return;
         glfwSetWindowShouldClose(w, GLFW_FALSE);
         run_or_confirm_unsaved(*quit_guard_ctx, [w]() {
             glfwSetWindowShouldClose(w, GLFW_TRUE);

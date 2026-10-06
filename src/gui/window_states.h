@@ -46,7 +46,6 @@ struct WindowStates {
     // main loop, which has the load callbacks in scope.
     std::string load_project_request;
     // With load_project_request: reopen WITHOUT saving labels first.
-    bool load_project_discard_labels = false;
     // Project > Camera Timestamps: the folder picked, waiting for the user to
     // confirm saving labels and reloading the project with it.
     std::string timestamps_pending;
@@ -134,6 +133,5 @@ struct WindowStates {
         tracktail.server_status.clear();
         show_help = false;
         load_project_request.clear();
-        load_project_discard_labels = false;
     }
 };
