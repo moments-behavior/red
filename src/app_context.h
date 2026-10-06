@@ -88,6 +88,13 @@ struct AppContext {
 #ifdef __APPLE__
     std::vector<int> &mac_last_uploaded_frame;
 #endif
+
+    // Untitled projects (run_or_confirm_unsaved, save_untitled_project).
+    // Owned here, after the references, so main's brace-init is unchanged.
+    std::function<void()> unsaved_action;    // waiting on Save / Don't Save / Cancel
+    bool unsaved_prompt = false;             // open that prompt next frame
+    std::function<void()> after_save_action; // run once Save Project has saved
+    bool save_project_prompt = false;        // open Save Project next frame
 };
 
 // --- Free functions replacing lambdas that captured main() locals ---
@@ -410,7 +417,9 @@ inline void on_project_loaded(AppContext &ctx,
     const double t_unload = load_timing::ms(t_stage);
 
     t_stage = load_timing::Clock::now();
-    switch_ini_to_project(ctx);
+    // An Untitled project has no folder to keep a layout in; it stays on the
+    // global one until the first save adopts it (save_untitled_project).
+    if (!ctx.pm.untitled) switch_ini_to_project(ctx);
     const double t_ini = load_timing::ms(t_stage);
     int expected_cameras = (int)ctx.pm.camera_names.size();
     std::map<std::string, std::string> selected_files;
@@ -533,4 +542,91 @@ inline void on_project_loaded(AppContext &ctx,
             save_user_settings(ctx.user_settings);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Untitled projects. Create Annotation Project opens one with no name, folder
+// or .redproj; the first save (Cmd+S, File > Save Labels, the toolbar) opens
+// Save Project, which names it and makes its folder. Its labels live only in
+// memory until then, and there is no auto-save, so nothing that replaces the
+// project may drop them without asking.
+// ---------------------------------------------------------------------------
+
+// Labels that exist nowhere on disk.
+inline bool untitled_unsaved(const AppContext &ctx) {
+    return ctx.pm.untitled && !ctx.annotations.empty();
+}
+
+// Run `action` -- which replaces the current project or quits -- now, or, if
+// that would drop an Untitled project's labels, once the user has chosen in
+// the Save / Don't Save / Cancel prompt (HandleMainMenuDialogs). Don't Save
+// clears the labels before running it, and Save runs it after the save, so an
+// action that guards itself with this passes the second time through.
+inline void run_or_confirm_unsaved(AppContext &ctx, std::function<void()> action) {
+    if (!untitled_unsaved(ctx)) {
+        action();
+        return;
+    }
+    ctx.unsaved_action = std::move(action);
+    ctx.unsaved_prompt = true;
+}
+
+// Give an Untitled project its name and folder: <location>/<name>/ with the
+// .redproj and labeled_data/ (holding the labels so far), add it to Recent
+// Projects, remember the location for the next one, and adopt the layout on
+// screen as the project's. On failure the project stays Untitled.
+inline bool save_untitled_project(AppContext &ctx, const std::string &name,
+                                  const std::string &location, std::string *err) {
+    namespace fs = std::filesystem;
+    if (name.empty() || name.find_first_of("/\\:") != std::string::npos) {
+        *err = "Give the project a name, without / \\ or :.";
+        return false;
+    }
+    if (location.empty()) {
+        *err = "Choose where to save it.";
+        return false;
+    }
+    const fs::path dir = fs::path(location) / name;
+    std::error_code ec;
+    if (fs::exists(dir / (name + ".redproj"), ec)) {
+        *err = "A project called " + name + " is already there.";
+        return false;
+    }
+    if (fs::exists(dir, ec) && !fs::is_empty(dir, ec)) {
+        *err = dir.string() + " already exists and is not empty.";
+        return false;
+    }
+
+    const ProjectManager before = ctx.pm;
+    auto fail = [&](const std::string &why) {
+        ctx.pm = before;
+        *err = why;
+        return false;
+    };
+    ProjectManager &pm = ctx.pm;
+    pm.project_name = name;
+    pm.project_root_path = location;
+    pm.project_path = dir.string();
+    pm.keypoints_root_folder = (dir / "labeled_data").string();
+    pm.untitled = false;
+    std::string e;
+    if (!ensure_dir_exists(pm.project_path, &e) ||
+        !ensure_dir_exists(pm.keypoints_root_folder, &e))
+        return fail("Could not create " + dir.string() + ": " + e);
+    const std::string redproj = (dir / (name + ".redproj")).string();
+    if (!save_project_manager_json(pm, redproj, &e))
+        return fail("Could not write the project file: " + e);
+    if (!ctx.annotations.empty()) {
+        const std::string saved = AnnotationCSV::save_all(
+            pm.keypoints_root_folder, ctx.skeleton.name, ctx.annotations,
+            ctx.scene ? (int)ctx.scene->num_cams : 0, ctx.skeleton.num_nodes,
+            pm.camera_names, &e);
+        if (saved.empty()) return fail("Could not save the labels: " + e);
+    }
+
+    ctx.user_settings.push_recent_project(redproj);
+    ctx.user_settings.last_project_root = location;
+    save_user_settings(ctx.user_settings);
+    switch_ini_to_project(ctx);   // a fresh layout file adopts the live one
+    return true;
 }

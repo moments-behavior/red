@@ -78,7 +78,9 @@ inline void DrawSwitchSkeletonWindow(SwitchSkeletonState &st, AppContext &ctx) {
 
     DrawPanel("Switch Skeleton", st.show, [&]() {
         if (pm.project_path.empty()) {
-            ImGui::TextDisabled("Open or create a project first.");
+            ImGui::TextDisabled(pm.untitled
+                                    ? "Save the project first (" RED_MOD_KEY "+S)."
+                                    : "Open or create a project first.");
             st.initialized = false;
             return;
         }

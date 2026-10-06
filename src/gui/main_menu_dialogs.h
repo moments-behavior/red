@@ -17,6 +17,17 @@ inline void load_project_from_path(
     std::function<void()> nuke_inference_fn = nullptr) {
     auto &pm = ctx.pm;
 
+    // Opening another project replaces an Untitled one: ask about its
+    // unsaved labels first. The prompt calls back here once settled.
+    if (untitled_unsaved(ctx)) {
+        run_or_confirm_unsaved(ctx, [&ctx, &win, cfg_path, print_metadata_fn,
+                                     print_summary_fn, nuke_inference_fn]() {
+            load_project_from_path(ctx, win, cfg_path, print_metadata_fn,
+                                   print_summary_fn, nuke_inference_fn);
+        });
+        return;
+    }
+
     // A tailcycle session is a directory holding a session.toml, not a
     // .redproj. Recents carry both, so route by what is actually there rather
     // than asking the caller to know which kind of path it has.
@@ -140,6 +151,117 @@ inline void HandleMainMenuDialogs(
             save_user_settings(user_settings);
         }
         ImGuiFileDialog::Instance()->Close();
+    }
+
+    // --- Untitled projects -------------------------------------------------
+    // Something would replace an Untitled project whose labels are only in
+    // memory (run_or_confirm_unsaved): ask what to do with them.
+    if (ctx.unsaved_prompt) {
+        ImGui::OpenPopup("Unsaved Project##unsaved");
+        ctx.unsaved_prompt = false;
+    }
+    if (ImGui::BeginPopupModal("Unsaved Project##unsaved", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("This Untitled project has labels that have "
+                               "not been saved.");
+        ImGui::Spacing();
+        if (ImGui::Button("Save...")) {
+            ctx.after_save_action = std::move(ctx.unsaved_action);
+            ctx.unsaved_action = nullptr;
+            ctx.save_project_prompt = true;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Don't Save")) {
+            auto action = std::move(ctx.unsaved_action);
+            ctx.unsaved_action = nullptr;
+            ctx.annotations.clear();   // dropped: the action now goes through
+            ImGui::CloseCurrentPopup();
+            if (action) action();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            ctx.unsaved_action = nullptr;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // Save Project: name an Untitled project and choose where it goes. A
+    // window, not a modal popup, so its Browse can open a file dialog.
+    if (ctx.save_project_prompt) {
+        ctx.save_project_prompt = false;
+        win.save_project_show = true;
+        win.save_project_error.clear();
+        win.save_project_name =
+            pm.media_folder.empty()
+                ? std::string("Untitled")
+                : std::filesystem::path(pm.media_folder).filename().string();
+        win.save_project_dir =
+            default_project_root(ctx.user_settings, ctx.default_dir);
+        ImGui::SetNextWindowFocus();
+    }
+    if (ImGuiFileDialog::Instance()->Display("ChooseSaveProjectDir",
+                                             ImGuiWindowFlags_NoCollapse,
+                                             ImVec2(680, 440))) {
+        if (ImGuiFileDialog::Instance()->IsOk())
+            win.save_project_dir = ImGuiFileDialog::Instance()->GetCurrentPath();
+        ImGuiFileDialog::Instance()->Close();
+    }
+    if (win.save_project_show) {
+        ImGui::SetNextWindowSize(ImVec2(560, 0), ImGuiCond_Appearing);
+        bool open = true;
+        if (ImGui::Begin("Save Project", &open,
+                         ImGuiWindowFlags_NoCollapse |
+                             ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextUnformatted("Name");
+            ImGui::SetNextItemWidth(400);
+            if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+            const bool enter = ImGui::InputText(
+                "##save_proj_name", &win.save_project_name,
+                ImGuiInputTextFlags_EnterReturnsTrue);
+            ImGui::TextUnformatted("Location");
+            ImGui::SetNextItemWidth(400);
+            ImGui::InputText("##save_proj_dir", &win.save_project_dir);
+            ImGui::SameLine();
+            if (ImGui::Button("Browse##save_proj")) {
+                IGFD::FileDialogConfig cfg;
+                cfg.countSelectionMax = 1;
+                cfg.path = win.save_project_dir;
+                cfg.flags = ImGuiFileDialogFlags_Modal;
+                ImGuiFileDialog::Instance()->OpenDialog(
+                    "ChooseSaveProjectDir", "Save Project In", nullptr, cfg);
+            }
+            ImGui::TextDisabled("Creates %s",
+                                (std::filesystem::path(win.save_project_dir) /
+                                 win.save_project_name)
+                                    .string()
+                                    .c_str());
+            if (!win.save_project_error.empty())
+                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "%s",
+                                   win.save_project_error.c_str());
+            ImGui::Spacing();
+            if (ImGui::Button("Save") || enter) {
+                std::string err;
+                if (save_untitled_project(ctx, win.save_project_name,
+                                          win.save_project_dir, &err)) {
+                    win.save_project_show = false;
+                    ctx.toasts.pushSuccess("Saved project " + pm.project_name);
+                    auto after = std::move(ctx.after_save_action);
+                    ctx.after_save_action = nullptr;
+                    if (after) after();
+                } else {
+                    win.save_project_error = err;
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) open = false;
+        }
+        ImGui::End();
+        if (!open) {
+            win.save_project_show = false;
+            ctx.after_save_action = nullptr;   // whatever waited on it is off
+        }
     }
 
     // Help > About Red

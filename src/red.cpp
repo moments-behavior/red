@@ -452,6 +452,21 @@ int main(int argc, char **argv) {
 #endif
     };
 
+    // Quitting with an Untitled project's labels only in memory asks first
+    // (run_or_confirm_unsaved), as replacing the project does. The window's
+    // close request -- its close button, and Cmd+Q on macOS, which GLFW
+    // routes here -- is cancelled until the user has chosen; Save or Don't
+    // Save then closes. A plain function pointer, so the context is static.
+    static AppContext *quit_guard_ctx = nullptr;
+    quit_guard_ctx = &ctx;
+    glfwSetWindowCloseCallback(window->render_target, [](GLFWwindow *w) {
+        if (!quit_guard_ctx || !untitled_unsaved(*quit_guard_ctx)) return;
+        glfwSetWindowShouldClose(w, GLFW_FALSE);
+        run_or_confirm_unsaved(*quit_guard_ctx, [w]() {
+            glfwSetWindowShouldClose(w, GLFW_TRUE);
+        });
+    });
+
     // Callbacks for static console-output functions in this file
     auto print_metadata = [&]() {
         print_video_metadata(demuxers, pm.camera_names, dc_context->seek_interval);
@@ -484,14 +499,13 @@ int main(int argc, char **argv) {
         [&](ProjectManager &pm_ref, std::string &err) -> bool {
         // Validate new project BEFORE closing old project — if setup fails
         // we want to keep the old project intact and show the error.
+        // A new project is Untitled: no folder or .redproj until the first
+        // save (save_untitled_project) names it and says where.
         ProjectManager new_pm = pm_ref;
-        if (!ensure_dir_exists(new_pm.project_path, &err))
-            return false;
+        new_pm.untitled = true;
+        new_pm.project_name.clear();
+        new_pm.project_path.clear();
         if (!setup_project(new_pm, skeleton, skeleton_map, &err))
-            return false;
-        std::filesystem::path redproj_path =
-            std::filesystem::path(new_pm.project_path) / (new_pm.project_name + ".redproj");
-        if (!save_project_manager_json(new_pm, redproj_path, &err))
             return false;
 
         // Validation passed — now safe to close old project
@@ -509,9 +523,6 @@ int main(int argc, char **argv) {
             return false;
         }
         on_project_loaded(ctx, print_metadata, print_summary);
-        // The next project starts where this one went.
-        ctx.user_settings.last_project_root = pm_ref.project_root_path;
-        save_user_settings(ctx.user_settings);
         return true;
     };
 
@@ -538,7 +549,7 @@ int main(int argc, char **argv) {
                 [&]() { return pm.plot_keypoints_flag; }});
     panels.add({"Help", [&]() {
                     help::Context hctx;
-                    hctx.project_open = !pm.project_path.empty();
+                    hctx.project_open = !pm.project_path.empty() || pm.untitled;
                     hctx.is_3d        = hctx.project_open && !project_is_2d(pm);
                     hctx.bbox_on      = win.bbox.enabled;
                     hctx.obb_on       = win.obb.enabled;
@@ -1767,7 +1778,19 @@ int main(int argc, char **argv) {
 #endif
 
         // Window title
-        glfwSetWindowTitle(window->render_target, "Red");
+        // "Red -- <project>", "Red -- Untitled", or "Red"; set on change only.
+        {
+            static std::string shown_title;
+            std::string title = "Red";
+            if (pm.untitled)
+                title += " \xE2\x80\x94 Untitled";
+            else if (!pm.project_name.empty())
+                title += " \xE2\x80\x94 " + pm.project_name;
+            if (title != shown_title) {
+                glfwSetWindowTitle(window->render_target, title.c_str());
+                shown_title = title;
+            }
+        }
 
         if (ps.just_seeked) {
             ps.just_seeked = false;

@@ -94,7 +94,9 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
             ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
             if (ImGui::Button("Open tailcycle Dataset",
                               ImVec2(2 * btn_w + spacing, 30))) {
-                tailcycle_open_browse(win.tailcycle_open);
+                run_or_confirm_unsaved(ctx, [&win]() {
+                    tailcycle_open_browse(win.tailcycle_open);
+                });
             }
             ImGui::PopStyleVar();
             if (ImGui::IsItemHovered())

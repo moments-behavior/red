@@ -226,7 +226,8 @@ inline void DrawJarvisImportWindow(JarvisImportState &state, AppContext &ctx) {
         const bool no_file    = state.data3d_path.empty();
         const bool needs_cal  = (state.dest == 1) && pm.camera_params.empty();
         const char *blocked =
-            no_project ? "Open a project first."
+            no_project ? (pm.untitled ? "Save the project first (" RED_MOD_KEY "+S)."
+                                      : "Open a project first.")
             : no_skel  ? "The project has no skeleton loaded."
             : no_file  ? "Choose a data3D.csv to import."
             : needs_cal ? "No calibration loaded — cannot bake 2D labels. "

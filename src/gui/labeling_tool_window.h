@@ -934,6 +934,13 @@ inline void DrawLabelingToolWindow(
         ctx.save_requested = false;
     }
 
+    // An Untitled project has nowhere to save yet: its first save is Save
+    // Project, which names it, makes its folder and writes the labels there.
+    if (state.save_requested && pm.untitled) {
+        state.save_requested = false;
+        ctx.save_project_prompt = true;
+    }
+
     if (state.save_requested) {
         std::string save_err;
         std::string saved_folder = AnnotationCSV::save_all(

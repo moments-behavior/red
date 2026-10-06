@@ -158,7 +158,9 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort |
                                  ImGuiHoveredFlags_AllowWhenDisabled)) {
             if (!can_set_timestamps)
-                ImGui::SetTooltip("Open a video project first.");
+                ImGui::SetTooltip(pm.untitled
+                                      ? "Save the project first (" RED_MOD_KEY "+S)."
+                                      : "Open a video project first.");
             else if (pm.timestamps_folder.empty())
                 ImGui::SetTooltip("Choose the folder with the cameras' frame "
                                   "timestamps, for the desync fix\nand Frame "
@@ -189,7 +191,9 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     // from a menu.
     if (TailcycleImport::available() && ImGui::BeginMenu("Tailcycle")) {
         if (ImGui::MenuItem("Open Dataset...")) {
-            tailcycle_open_browse(win.tailcycle_open);
+            run_or_confirm_unsaved(ctx, [&win]() {
+                tailcycle_open_browse(win.tailcycle_open);
+            });
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
             ImGui::SetTooltip("Open a tailcycle-dataset session to look at or "

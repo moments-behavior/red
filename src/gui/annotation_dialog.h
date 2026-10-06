@@ -66,8 +66,6 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
             state.discovered_cameras =
                 discover_media_cameras(state.media_folder, &state.media_kind);
             state.camera_selected.assign(state.discovered_cameras.size(), true);
-            if (pm.project_name.empty())
-                pm.project_name = chosen.filename().string();
         }
         ImGuiFileDialog::Instance()->Close();
     }
@@ -108,9 +106,6 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
         state.discovered_cameras =
                 discover_media_cameras(state.media_folder, &state.media_kind);
         state.camera_selected.assign(state.discovered_cameras.size(), true);
-        if (pm.project_name.empty())
-            pm.project_name =
-                std::filesystem::path(state.media_folder).filename().string();
     }
     state.was_shown = state.show;
 
@@ -263,47 +258,6 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
             } else {
                 ImGui::Dummy(ImVec2(1, 1));
             }
-
-            // ---- Project Name ----
-            ImGui::TableNextRow();
-            LabelCell("Project Name");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            ImGui::InputText("##annot_projname", &pm.project_name);
-            ImGui::TableSetColumnIndex(2);
-            ImGui::Dummy(ImVec2(1, 1));
-
-            // ---- Project Root Path ----
-            ImGui::TableNextRow();
-            LabelCell("Project Root Path");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            ImGui::InputText("##annot_rootpath", &pm.project_root_path);
-            ImGui::TableSetColumnIndex(2);
-            if (ImGui::Button("Browse##annot_root")) {
-                IGFD::FileDialogConfig cfg;
-                cfg.countSelectionMax = 1;
-                cfg.path = pm.project_root_path;
-                cfg.flags = ImGuiFileDialogFlags_Modal;
-                ImGuiFileDialog::Instance()->OpenDialog(
-                    "ChooseAnnotRootDir", "Choose Project Root", nullptr, cfg);
-            }
-
-            // ---- Full Path (computed) ----
-            {
-                std::filesystem::path p =
-                    std::filesystem::path(pm.project_root_path) / pm.project_name;
-                pm.project_path = p.string();
-            }
-            ImGui::TableNextRow();
-            LabelCell("Full Path");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::BeginDisabled();
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            ImGui::InputText("##annot_fullpath", &pm.project_path);
-            ImGui::EndDisabled();
-            ImGui::TableSetColumnIndex(2);
-            ImGui::Dummy(ImVec2(1, 1));
 
             // ---- Skeleton ----
             int skel_mode = pm.load_skeleton_from_json ? 0 : 1;
@@ -468,8 +422,6 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
             missing.push_back(state.discovered_cameras.empty()
                                   ? "a media folder with cameras in it"
                                   : "at least one camera ticked");
-        if (pm.project_name.empty())      missing.push_back("a project name");
-        if (pm.project_root_path.empty()) missing.push_back("a project root path");
         if (pm.load_skeleton_from_json && pm.skeleton_file.empty())
             missing.push_back("a skeleton file");
         if (!state.two_d_mode && annot_n_selected > 1 &&
@@ -504,12 +456,20 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
                 if (state.camera_selected[i])
                     pm.camera_names.push_back(state.discovered_cameras[i]);
 
-            std::string error_message;
-            if (!on_create(pm, error_message)) {
-                state.status = error_message;
-            } else {
-                state.show = false;
-            }
+            // No name or folder yet: it opens as Untitled, and the first
+            // save asks for both. Replacing an Untitled project that has
+            // unsaved labels asks first (run_or_confirm_unsaved).
+            pm.project_name.clear();
+            pm.project_path.clear();
+            pm.untitled = true;
+            AnnotationCreateCallback create = on_create;
+            run_or_confirm_unsaved(ctx, [&ctx, &state, create]() {
+                std::string error_message;
+                if (!create(ctx.pm, error_message))
+                    state.status = error_message;
+                else
+                    state.show = false;
+            });
         }
         ImGui::EndDisabled();
     }

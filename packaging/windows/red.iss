@@ -7,8 +7,8 @@
 ; Installs per user by default -- no admin, into %LOCALAPPDATA%\Programs\red --
 ; with the option to install for all users. Start menu entry, optional desktop
 ; shortcut, an uninstaller in Settings > Apps. Uninstalling removes the program
-; only: projects and settings (%USERPROFILE%\red_data, %USERPROFILE%\.config\red)
-; are the user's and stay.
+; only: projects and settings (%USERPROFILE%\.config\red) are the user's
+; and stay.
 
 #ifndef AppVersion
   #define AppVersion "dev"

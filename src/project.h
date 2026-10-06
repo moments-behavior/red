@@ -66,6 +66,10 @@ struct ProjectManager {
     // Frame Drops use only this folder; red never goes looking for them.
     // Empty: no timestamps, so neither is available.
     std::string timestamps_folder;
+    // Created but not yet saved: no name, no folder, no .redproj. The first
+    // save (Cmd+S) asks where and what to call it. Runtime only, never
+    // written -- a saved project is by definition not untitled.
+    bool untitled = false;
 
 
     // empty means "auto-discover in the recording folder", the normal case.
@@ -451,10 +455,16 @@ inline bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
     // of truth). Covers both the JSON and primitive skeleton paths at once.
     apply_keypoint_colormap(skeleton, g_keypoint_colormap);
 
-    pm.keypoints_root_folder =
-        (std::filesystem::path(pm.project_path) / "labeled_data").string();
-    if (!ensure_dir_exists(pm.keypoints_root_folder, err))
-        return false;
+    // An Untitled project has no folder yet: its labels live in memory until
+    // the first save gives it one (save_untitled_project).
+    if (pm.untitled) {
+        pm.keypoints_root_folder.clear();
+    } else {
+        pm.keypoints_root_folder =
+            (std::filesystem::path(pm.project_path) / "labeled_data").string();
+        if (!ensure_dir_exists(pm.keypoints_root_folder, err))
+            return false;
+    }
 
     pm.plot_keypoints_flag = true;
     return true;
