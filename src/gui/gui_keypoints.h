@@ -162,9 +162,12 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
             // a toggle, so that is the difference between marking and
             // unmarking. `is_active` below is the ANIMAL, a separate thing.
             const bool node_is_active = (cam.active_id == node);
-            ImVec4 c = node_is_active
+            // Colouring by instance or by error: the active node keeps that
+            // colour (its size marks it) -- a white one would hide it.
+            const bool overridden = node_override && node < node_override->size();
+            ImVec4 c = node_is_active && !overridden
                            ? active_color
-                           : node_override && node < node_override->size()
+                           : overridden
                                  ? (*node_override)[node]
                            : (node < skeleton->node_colors.size()
                                   ? skeleton->node_colors.at(node)
@@ -252,7 +255,11 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
         if (cam.keypoints[node].usable()) {
             ImVec4 node_color;
             if (cam.active_id == node) {
-                node_color = active_color; // active keypoint: user-selected color
+                // The user's active colour, unless colouring by instance or
+                // by error (then that colour; the size marks it active).
+                node_color = node_override && node < node_override->size()
+                                 ? (*node_override)[node]
+                                 : active_color;
                 pt_size = 8.0f;
             } else {
                 node_color = node_override && node < node_override->size()
