@@ -125,6 +125,34 @@ inline bool bbox_blocks_pan(const BBoxToolState &state) {
     return state.enabled && (state.drawing || ImGui::GetIO().KeyShift);
 }
 
+// The pointer while a box can be drawn (Shift over a view) or is being drawn:
+// crosshairs with a small box beside them, in the class colour. Replaces
+// ImPlot's "not allowed" cursor, which it shows for a drag on the views
+// bbox_blocks_pan locks. Call inside the camera's plot.
+inline void bbox_draw_cursor(const BBoxToolState &state, int cam_idx) {
+    if (!state.enabled) return;
+    const bool here = state.drawing ? cam_idx == state.drawing_cam
+                                    : ImGui::GetIO().KeyShift && ImPlot::IsPlotHovered();
+    if (!here) return;
+    ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+    ImDrawList *dl = ImPlot::GetPlotDrawList();
+    const ImVec2 m = ImGui::GetIO().MousePos;
+    const ImVec2 lo = ImPlot::GetPlotPos();
+    const ImVec2 hi(lo.x + ImPlot::GetPlotSize().x, lo.y + ImPlot::GetPlotSize().y);
+    const ImU32 col = ImGui::GetColorU32(state.current_color());
+    const ImU32 cross = IM_COL32(255, 255, 255, 150);
+    dl->PushClipRect(lo, hi, true);
+    dl->AddLine(ImVec2(lo.x, m.y), ImVec2(m.x - 5, m.y), cross);
+    dl->AddLine(ImVec2(m.x + 5, m.y), ImVec2(hi.x, m.y), cross);
+    dl->AddLine(ImVec2(m.x, lo.y), ImVec2(m.x, m.y - 5), cross);
+    dl->AddLine(ImVec2(m.x, m.y + 5), ImVec2(m.x, hi.y), cross);
+    // The box badge, below-right of the pointer.
+    const ImVec2 b0(m.x + 9, m.y + 9), b1(m.x + 23, m.y + 19);
+    dl->AddRectFilled(b0, b1, IM_COL32(0, 0, 0, 120));
+    dl->AddRect(b0, b1, col, 0.0f, 0, 2.0f);
+    dl->PopClipRect();
+}
+
 // Handle bbox input on a focused camera view
 inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap,
                                u32 frame, int cam_idx, int num_nodes,

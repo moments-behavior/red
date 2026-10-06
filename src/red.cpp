@@ -1621,6 +1621,7 @@ int main(int argc, char **argv) {
                             if (win.bbox.enabled) {
                                 bbox_handle_input(win.bbox, annotations,
                                                   frame, j, nn, nc, iw, ih);
+                                bbox_draw_cursor(win.bbox, j);
                             }
                             if (display.show_bboxes) {
                                 bbox_draw_overlays(win.bbox, annotations,
