@@ -58,8 +58,17 @@ inline ImVec4 box_class_color(const BoxClasses &classes, int i) {
     return default_box_class_color(i);
 }
 
-inline const char *box_class_name(const BoxClasses &classes, int i) {
-    return i >= 0 && i < (int)classes.names.size() ? classes.names[i].c_str() : "?";
+// A box's label: "#1", or "rat #1" once there is more than one class to tell
+// apart.
+inline std::string box_label(const BoxClasses &classes, const FrameAnnotation &fa) {
+    std::string s = "#" + std::to_string(fa.instance_id);
+    if (classes.names.size() > 1) {
+        const int ci = fa.category_id;
+        s = (ci >= 0 && ci < (int)classes.names.size() ? classes.names[(size_t)ci]
+                                                       : std::string("?")) +
+            " " + s;
+    }
+    return s;
 }
 
 // Adds Class_<n>, n its index, to the list and makes it current.
@@ -144,11 +153,7 @@ inline void bbox_draw_overlays(const BBoxToolState &state,
         ImGui::PopID();
 
         if (state.show_ids) {
-            char label[96];
-            // Class, then which one of that class: "Class_0 #1".
-            snprintf(label, sizeof(label), "%s #%d",
-                     box_class_name(classes, ci), fa.instance_id);
-            ImPlot::PlotText(label, x1 + 4, y2_plot - 4);
+            ImPlot::PlotText(box_label(classes, fa).c_str(), x1 + 4, y2_plot - 4);
         }
     }
 }

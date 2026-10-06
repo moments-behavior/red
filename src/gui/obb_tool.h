@@ -136,10 +136,8 @@ inline void obb_draw_overlays(OBBToolState &state, const BBoxToolState &bbox_sta
             ImGui::PopID();
 
             if (bbox_state.show_ids) {
-                char label[96];
-                snprintf(label, sizeof(label), "%s #%d (OBB)",
-                         box_class_name(classes, ci), fa.instance_id);
-                ImPlot::PlotText(label, plot_cx, plot_cy);
+                ImPlot::PlotText((box_label(classes, fa) + " (OBB)").c_str(),
+                                 plot_cx, plot_cy);
             }
         }
     }
