@@ -312,24 +312,22 @@ inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
         ImGui::SeparatorText("Classes");
         if (classes.empty())
             ImGui::TextDisabled("None yet -- the first box adds Class_0.");
+        // One row per class: pick it, and edit its name in place (YOLO
+        // export writes these names).
         for (int i = 0; i < (int)classes.size(); ++i) {
-            ImGui::ColorButton(("##clr" + std::to_string(i)).c_str(),
-                               box_class_color(i), 0, ImVec2(14, 14));
-            ImGui::SameLine();
-            bool sel = (i == state.current_class);
-            if (ImGui::Selectable((classes[i] + "##cls" + std::to_string(i)).c_str(), sel))
+            ImGui::PushID(i);
+            if (ImGui::RadioButton("##pick", i == state.current_class))
                 state.current_class = i;
-        }
-        if (ImGui::Button("+ Add Class")) add_box_class(state, classes);
-        // The selected class's name: what YOLO export writes in data.yaml.
-        if (state.current_class >= 0 && state.current_class < (int)classes.size()) {
+            ImGui::SameLine();
+            ImGui::ColorButton("##clr", box_class_color(i),
+                               ImGuiColorEditFlags_NoTooltip, ImVec2(14, 14));
             ImGui::SameLine();
             ImGui::SetNextItemWidth(-FLT_MIN);
-            ImGui::InputTextWithHint("##class_name", "name",
-                                     &classes[(size_t)state.current_class]);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-                ImGui::SetTooltip("Rename the selected class (YOLO export uses these names).");
+            ImGui::InputText("##name", &classes[(size_t)i]);
+            if (ImGui::IsItemActivated()) state.current_class = i;
+            ImGui::PopID();
         }
+        if (ImGui::Button("+ Add Class")) add_box_class(state, classes);
         },
         nullptr, ImVec2(300, 350));
 }
