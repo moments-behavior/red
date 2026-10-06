@@ -519,6 +519,7 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 const std::string path =
                     ImGuiFileDialog::Instance()->GetFilePathName();
+                remember_skeleton_dir(ctx, path);
                 std::ofstream f(path);
                 if (f) {
                     st.name = std::filesystem::path(path).stem().string();
@@ -538,6 +539,7 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 const std::string path =
                     ImGuiFileDialog::Instance()->GetFilePathName();
+                remember_skeleton_dir(ctx, path);
                 std::ifstream f(path);
                 nlohmann::json j;
                 bool ok = false;

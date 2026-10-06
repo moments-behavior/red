@@ -53,7 +53,7 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
     const auto &skeleton_dir = ctx.skeleton_dir;
     const std::string default_browse_path =
         ctx.user_settings.default_media_root_path.empty()
-            ? ctx.red_data_dir
+            ? ctx.default_dir
             : ctx.user_settings.default_media_root_path;
     // File dialog handlers (run every frame, even when window is hidden)
     if (ImGuiFileDialog::Instance()->Display("ChooseAnnotVideoDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
@@ -75,8 +75,10 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
         ImGuiFileDialog::Instance()->Close();
     }
     if (ImGuiFileDialog::Instance()->Display("ChooseAnnotSkeleton", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk())
+        if (ImGuiFileDialog::Instance()->IsOk()) {
             pm.skeleton_file = ImGuiFileDialog::Instance()->GetFilePathName();
+            remember_skeleton_dir(ctx, pm.skeleton_file);
+        }
         ImGuiFileDialog::Instance()->Close();
     }
     if (ImGuiFileDialog::Instance()->Display("ChooseAnnotCalib", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {

@@ -301,9 +301,9 @@ int main(int argc, char **argv) {
     scene->use_cpu_buffer = true;
     scene->gpu_upload = false; // set for real in render_allocate_scene_memory
     scene->force_host_upload = false;
-    std::string red_data_dir;
+    std::string default_dir;
     std::string media_root_dir;
-    prepare_application_folders(red_data_dir, media_root_dir);
+    prepare_application_folders(default_dir, media_root_dir);
     UserSettings user_settings = load_user_settings();
     // Honor the persisted buffer mode (default GPU Buffer on first launch).
     // Frame buffers are allocated later in media_loader::render_allocate_scene_memory
@@ -312,7 +312,11 @@ int main(int argc, char **argv) {
     // Seed the keypoint colormap global from persisted settings before any
     // project loads (setup_project reads it to color node_colors).
     g_keypoint_colormap = user_settings.keypoint_colormap;
-    std::string skeleton_dir = red_data_dir + "/skeleton";
+    // Where skeleton .json dialogs start: the folder of the last one picked
+    // or saved (remembered in user settings), else the default folder.
+    std::string skeleton_dir = user_settings.last_skeleton_dir.empty()
+                                   ? default_dir
+                                   : user_settings.last_skeleton_dir;
     std::vector<std::thread> decoder_threads;
     std::vector<FFmpegDemuxer *> demuxers;
 
@@ -410,9 +414,7 @@ int main(int argc, char **argv) {
 
     // variables for project management
     ProjectManager pm = ProjectManager();
-    pm.project_root_path = user_settings.default_project_root_path.empty()
-                               ? red_data_dir
-                               : user_settings.default_project_root_path;
+    pm.project_root_path = default_project_root(user_settings, default_dir);
     pm.media_folder = user_settings.default_media_root_path.empty()
                           ? media_root_dir
                           : user_settings.default_media_root_path;
@@ -440,7 +442,7 @@ int main(int argc, char **argv) {
         skeleton, skeleton_map,
         annotations,
         popups, toasts, deferred, preframe,
-        user_settings, red_data_dir, skeleton_dir,
+        user_settings, default_dir, skeleton_dir,
         imgs_names, demuxers, decoder_threads,
         is_view_focused, window_was_decoding,
         input_is_imgs, label_buffer_size, current_frame_num, active_instance,
@@ -507,6 +509,9 @@ int main(int argc, char **argv) {
             return false;
         }
         on_project_loaded(ctx, print_metadata, print_summary);
+        // The next project starts where this one went.
+        ctx.user_settings.last_project_root = pm_ref.project_root_path;
+        save_user_settings(ctx.user_settings);
         return true;
     };
 

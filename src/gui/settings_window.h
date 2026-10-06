@@ -33,7 +33,7 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
                 IGFD::FileDialogConfig cfg;
                 cfg.countSelectionMax = 1;
                 cfg.path = s.default_project_root_path.empty()
-                               ? ctx.red_data_dir
+                               ? ctx.default_dir
                                : s.default_project_root_path;
                 cfg.flags = ImGuiFileDialogFlags_Modal;
                 ImGuiFileDialog::Instance()->OpenDialog(
@@ -48,7 +48,7 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
                 IGFD::FileDialogConfig cfg;
                 cfg.countSelectionMax = 1;
                 cfg.path = s.default_media_root_path.empty()
-                               ? ctx.red_data_dir
+                               ? ctx.default_dir
                                : s.default_media_root_path;
                 cfg.flags = ImGuiFileDialogFlags_Modal;
                 ImGuiFileDialog::Instance()->OpenDialog(

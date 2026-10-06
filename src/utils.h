@@ -51,7 +51,7 @@ std::vector<std::string> string_split(std::string s, std::string delimiter);
 std::string format_time(float t_seconds);
 void seek_all_cameras(RenderScene *scene, int frame_number, double video_fps,
                       PlaybackState &state, bool seek_accurate);
-void prepare_application_folders(std::string &red_data_dir,
+void prepare_application_folders(std::string &default_dir,
                                  std::string &media_dir);
 std::string dir_difference(const std::filesystem::path &a,
                            const std::filesystem::path &b);

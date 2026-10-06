@@ -114,15 +114,19 @@ bool ensure_dir_exists(std::string path_string, std::string *err) {
     return true;
 }
 
-void prepare_application_folders(std::string &red_data_dir,
+void prepare_application_folders(std::string &default_dir,
                                  std::string &media_dir) {
-
+    // Where file dialogs and new projects start when nothing better is known:
+    // the home folder, or what ~/.config/red/config.json says. red keeps its
+    // own files in ~/.config/red; it used to create ~/red_data as a default
+    // project root, skeleton library and layout store, none of which needed a
+    // folder of its own.
     std::string home_dir = get_home_directory();
 
-    // check for config.json
     std::filesystem::path config_path =
         std::filesystem::path(home_dir) / ".config/red/config.json";
-    if (std::filesystem::exists(config_path)) {
+    std::error_code ec;
+    if (std::filesystem::exists(config_path, ec)) {
         try {
             std::ifstream f(config_path);
             nlohmann::json j;
@@ -134,7 +138,7 @@ void prepare_application_folders(std::string &red_data_dir,
 
             if (j.contains("project_folder") &&
                 j["project_folder"].is_string()) {
-                red_data_dir = j["project_folder"].get<std::string>();
+                default_dir = j["project_folder"].get<std::string>();
             }
         } catch (const std::exception &e) {
             std::cerr << "Failed to read/parse config.json: " << e.what()
@@ -142,25 +146,8 @@ void prepare_application_folders(std::string &red_data_dir,
         }
     }
 
-    if (red_data_dir.empty()) {
-        red_data_dir = home_dir + "/red_data";
-    }
-    // "skeleton" is where skeleton .json files live and is browsed to by the
-    // Skeleton Creator and the project dialog. A "yolo_model" folder was
-    // created alongside it and never read by anything -- export_yolo writes to
-    // the export destination, not here.
-    {
-        std::filesystem::path path =
-            std::filesystem::path(red_data_dir) / "skeleton";
-        if (!std::filesystem::exists(path) &&
-            std::filesystem::create_directories(path)) {
-            std::cout << "Created skeleton folder..." << std::endl;
-        }
-    }
-
-    if (media_dir.empty()) {
-        media_dir = red_data_dir;
-    }
+    if (default_dir.empty()) default_dir = home_dir;
+    if (media_dir.empty()) media_dir = default_dir;
 }
 
 void seek_all_cameras(RenderScene *scene, int frame_number, double video_fps,

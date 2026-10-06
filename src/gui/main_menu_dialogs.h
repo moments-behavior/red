@@ -312,6 +312,7 @@ inline void HandleMainMenuDialogs(
         if (ImGuiFileDialog::Instance()->IsOk()) {
             win.switch_skeleton.skeleton_file =
                 ImGuiFileDialog::Instance()->GetFilePathName();
+            remember_skeleton_dir(ctx, win.switch_skeleton.skeleton_file);
         }
         ImGuiFileDialog::Instance()->Close();
     }

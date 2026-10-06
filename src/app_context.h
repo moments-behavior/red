@@ -54,7 +54,7 @@ struct AppContext {
 
     // Settings + paths
     UserSettings &user_settings;
-    std::string &red_data_dir;
+    std::string &default_dir;
     std::string &skeleton_dir;
 
     // Media state
@@ -92,6 +92,16 @@ struct AppContext {
 
 // --- Free functions replacing lambdas that captured main() locals ---
 
+// A skeleton .json was picked or saved: start the next skeleton dialog in its
+// folder, this session and next (remembered in user settings).
+inline void remember_skeleton_dir(AppContext &ctx, const std::string &file) {
+    const std::string dir = std::filesystem::path(file).parent_path().string();
+    if (dir.empty() || dir == ctx.skeleton_dir) return;
+    ctx.skeleton_dir = dir;
+    ctx.user_settings.last_skeleton_dir = dir;
+    save_user_settings(ctx.user_settings);
+}
+
 // Copy the shipped default_imgui_layout.ini into a project folder.
 // No-op if ini already exists.
 // Where this project's layout is kept, seeding it from the shipped default if
@@ -99,7 +109,7 @@ struct AppContext {
 //
 // Next to the project when that directory can be written, which is the useful
 // place -- the layout travels with the project. When it cannot be, the layout
-// goes under red_data instead, keyed by the project path. A read-only or
+// goes under ~/.config/red/layouts instead, keyed by the project path. A read-only or
 // permission-denied project directory is ordinary on a shared NFS export, and
 // the copy failure used to be swallowed into an unchecked error_code: the ini
 // then did not exist, LoadIniSettingsFromDisk returned early, and with no
@@ -126,13 +136,13 @@ inline std::string resolve_project_layout_path(const AppContext &ctx,
         if (!ec) return in_project.string();
     }
 
-    // Not writable there. Keep it in red_data under a name derived from the
-    // project path, so two projects cannot share one layout.
+    // Not writable there. Keep it in ~/.config/red/layouts under a name derived
+    // from the project path, so two projects cannot share one layout.
     std::string key;
     for (char c : proj_path)
         key += (std::isalnum((unsigned char)c) ? c : '_');
     if (key.size() > 120) key = key.substr(key.size() - 120);
-    const fs::path dir = fs::path(ctx.red_data_dir) / "layouts";
+    const fs::path dir = user_settings_path().parent_path() / "layouts";
     ec.clear();
     fs::create_directories(dir, ec);
     const fs::path fallback = dir / (key + ".ini");
@@ -342,9 +352,7 @@ inline void close_project(AppContext &ctx, bool save_labels = true) {
     // and every one after it did not -- a required field that silently emptied
     // itself once you had opened anything.
     ctx.pm.project_root_path =
-        ctx.user_settings.default_project_root_path.empty()
-            ? ctx.red_data_dir
-            : ctx.user_settings.default_project_root_path;
+        default_project_root(ctx.user_settings, ctx.default_dir);
     ctx.pm.calibration_folder.clear();
     ctx.pm.keypoints_root_folder.clear();
     ctx.pm.camera_params.clear();

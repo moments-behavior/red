@@ -10,6 +10,10 @@ struct UserSettings {
     // Paths
     std::string default_project_root_path;
     std::string default_media_root_path;
+    // Remembered, not set by hand: where the last project was created and the
+    // last skeleton .json picked or saved, so the next dialog starts there.
+    std::string last_project_root;
+    std::string last_skeleton_dir;
 
     // Display defaults
     // UI text scale. ImGui 1.92+ re-rasterises at the scaled size, so this is
@@ -79,6 +83,8 @@ inline void to_json(nlohmann::json &j, const UserSettings &s) {
     j = nlohmann::json{
         {"default_project_root_path", s.default_project_root_path},
         {"default_media_root_path", s.default_media_root_path},
+        {"last_project_root", s.last_project_root},
+        {"last_skeleton_dir", s.last_skeleton_dir},
         {"ui_text_scale", s.ui_text_scale},
         {"default_brightness", s.default_brightness},
         {"default_contrast", s.default_contrast},
@@ -102,6 +108,8 @@ inline void from_json(const nlohmann::json &j, UserSettings &s) {
         j.value("default_project_root_path", std::string{});
     s.default_media_root_path =
         j.value("default_media_root_path", std::string{});
+    s.last_project_root = j.value("last_project_root", std::string{});
+    s.last_skeleton_dir = j.value("last_skeleton_dir", std::string{});
     s.ui_text_scale = j.value("ui_text_scale", 1.0f);
     s.default_brightness = j.value("default_brightness", 0);
     s.default_contrast = j.value("default_contrast", 1.0f);
@@ -119,6 +127,15 @@ inline void from_json(const nlohmann::json &j, UserSettings &s) {
     s.jarvis_seed = j.value("jarvis_seed", 42);
     s.jarvis_jpeg_quality = j.value("jarvis_jpeg_quality", 95);
     s.recent_projects = j.value("recent_projects", std::vector<std::string>{});
+}
+
+// Where a new project is created by default: the Settings choice if any,
+// else wherever the last one went, else `fallback` (home, or config.json's).
+inline std::string default_project_root(const UserSettings &s,
+                                        const std::string &fallback) {
+    if (!s.default_project_root_path.empty()) return s.default_project_root_path;
+    if (!s.last_project_root.empty()) return s.last_project_root;
+    return fallback;
 }
 
 inline std::filesystem::path user_settings_path() {
