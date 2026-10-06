@@ -500,30 +500,38 @@ inline bool any_instance_has_manual_labels(const FrameInstances &fis) {
     return false;
 }
 
-// Start a frame with the instances of the nearest labelled frame, earlier or
-// later (the closer; earlier on a tie): its animals (ids and classes, in
-// order), all unlabelled here -- else just instance 0. A frame with only
-// empty instances does not count. Labelling five animals then moving on keeps
-// five, at the same places in the list. A frame with real labels is returned
-// as it is; one with only empty instances (saved from an earlier visit) is
-// topped up with the animals it lacks, keeping those it has.
+// Every instance labelled anywhere in the project -- the roster a new frame
+// starts with. In the order of the labelled frame with the most instances,
+// then any others seen elsewhere by id. (instance_id, category_id) pairs.
+inline std::vector<std::pair<int, int>> instance_roster(const AnnotationMap &amap) {
+    const FrameInstances *biggest = nullptr;
+    std::map<int, int> seen;   // id -> class
+    for (const auto &[f, fis] : amap) {
+        if (!any_instance_has_labels(fis)) continue;
+        if (!biggest || fis.size() > biggest->size()) biggest = &fis;
+        for (const auto &fa : fis) seen.emplace(fa.instance_id, fa.category_id);
+    }
+    std::vector<std::pair<int, int>> out;
+    if (biggest)
+        for (const auto &fa : *biggest) {
+            out.push_back({fa.instance_id, fa.category_id});
+            seen.erase(fa.instance_id);
+        }
+    for (const auto &[id, cat] : seen) out.push_back({id, cat});
+    return out;
+}
+
+// Start a frame with every instance in the project (instance_roster), all
+// unlabelled here -- else just instance 0. Labelling five animals then moving
+// on keeps five, at the same places in the list, even past a frame where one
+// was out of view. A frame with real labels is returned as it is; one with
+// only empty instances (saved from an earlier visit) is topped up with the
+// animals it lacks, keeping those it has.
 inline FrameInstances &create_frame_instances(AnnotationMap &amap, u32 frame,
                                               int num_nodes, int num_cameras) {
     auto here = amap.find(frame);
     if (here != amap.end() && any_instance_has_labels(here->second)) return here->second;
-    const FrameInstances *before = nullptr, *after = nullptr;
-    u32 f_before = 0, f_after = 0;
-    for (auto it = amap.lower_bound(frame); it != amap.begin();) {
-        --it;
-        if (any_instance_has_labels(it->second)) { before = &it->second; f_before = it->first; break; }
-    }
-    for (auto it = amap.upper_bound(frame); it != amap.end(); ++it)
-        if (any_instance_has_labels(it->second)) { after = &it->second; f_after = it->first; break; }
-    const FrameInstances *from =
-        before && (!after || frame - f_before <= f_after - frame) ? before : after;
-    std::vector<std::pair<int, int>> ids;   // (instance_id, category_id)
-    if (from)
-        for (const auto &fa : *from) ids.push_back({fa.instance_id, fa.category_id});
+    std::vector<std::pair<int, int>> ids = instance_roster(amap);
     if (ids.empty()) ids.push_back({0, 0});
     FrameInstances &fis = amap[frame];
     for (const auto &[id, cat] : ids)
