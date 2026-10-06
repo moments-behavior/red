@@ -44,7 +44,7 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
     };
 
     // Title and what it is (the version is in Help > About Red).
-    centered_text("Red", false, ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
+    centered_text("Red", false, ImVec4(0.95f, 0.42f, 0.38f, 1.0f));   // a soft red
     centered_text("Multi-Camera Keypoint Labeling Tool", true, ImVec4());
     ImGui::Spacing();
     ImGui::Separator();
@@ -154,7 +154,7 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
         for (size_t i = 0; i < links.size(); ++i)
             w += ImGui::CalcTextSize(links[i]).x + (i ? ImGui::CalcTextSize(sep).x : 0);
         ImGui::SetCursorPosX((avail_w - w) * 0.5f + ImGui::GetStyle().WindowPadding.x);
-        // The title's light blue: the default link blue is dim on this panel.
+        // A light blue: the default link blue is dim on this panel.
         ImGui::PushStyleColor(ImGuiCol_TextLink, ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
         for (size_t i = 0; i < links.size(); ++i) {
             if (i) {
