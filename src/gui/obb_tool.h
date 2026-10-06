@@ -193,7 +193,7 @@ inline void obb_draw_overlays(OBBToolState &state, const BBoxToolState &bbox_sta
 
 // Handle OBB input on a focused camera view
 inline void obb_handle_input(OBBToolState &state, AnnotationMap &amap, u32 frame, int cam_idx,
-                              int &active_instance, int num_nodes, int num_cameras,
+                              int active_instance, int num_nodes, int num_cameras,
                               int img_w, int img_h) {
     if (!state.enabled) return;
     if (!ImPlot::IsPlotHovered()) return;
@@ -230,8 +230,8 @@ inline void obb_handle_input(OBBToolState &state, AnnotationMap &amap, u32 frame
             double img_angle = -angle;
 
             // Store on the animal being edited
-            auto &fa = box_target(amap, frame, /*class*/ 0, active_instance,
-                                  num_nodes, num_cameras);
+            auto &fa = box_target(amap, frame, active_instance, num_nodes,
+                                  num_cameras);
 
             if (cam_idx < (int)fa.cameras.size()) {
                 auto &ext = fa.cameras[cam_idx].get_extras();

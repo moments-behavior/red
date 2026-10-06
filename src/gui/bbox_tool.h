@@ -4,8 +4,7 @@
 // Shift+drag draws a new bbox: press with Shift held, drag, let go. Bboxes are
 // stored in the unified AnnotationMap (CameraAnnotation extras), on the
 // instance being edited. One class for now: tailcycle, which red exports to,
-// has no class column, so a second class would not survive it. The labels
-// keep a class per instance (0) so classes can come back. The class list is
+// has no class column, so a second class would not survive it. The class list is
 // pm.annotation_config.class_names, saved with the labels (annotations.json).
 
 #include "imgui.h"
@@ -40,27 +39,15 @@ struct BBoxToolState {
 // Boxes are drawn in one colour; the hovered one at full strength.
 inline ImVec4 box_color() { return ImVec4(0.3f, 1.0f, 1.0f, 1.0f); }
 
-// The instance a new box or OBB of class `cat` goes on, made the one being
-// edited (active_instance, an index into the frame's instances):
-//   - the instance being edited, if it is of that class;
-//   - else that class's instance with the same id, if the frame has it;
-//   - else a new instance of that class, with its next free id.
-inline FrameAnnotation &box_target(AnnotationMap &amap, u32 frame, int cat,
-                                   int &active_instance, int num_nodes,
+// The instance a new box goes on: the one being edited, or a first instance
+// on a frame that has none.
+inline FrameAnnotation &box_target(AnnotationMap &amap, u32 frame,
+                                   int active_instance, int num_nodes,
                                    int num_cameras) {
-    FrameInstances &fis = amap[frame];
-    int id = 0;
-    if (!fis.empty()) {
-        FrameAnnotation &editing = instance_or_first(fis, active_instance);
-        if (editing.category_id == cat) return editing;
-        id = find_instance(fis, editing.instance_id, cat)
-                 ? editing.instance_id
-                 : next_free_instance_id(fis, cat);
-    }
-    FrameAnnotation &fa = get_or_create_frame(amap, frame, num_nodes,
-                                              num_cameras, id, cat);
-    active_instance = (int)(&fa - fis.data());
-    return fa;
+    auto it = amap.find(frame);
+    if (it != amap.end() && !it->second.empty())
+        return instance_or_first(it->second, active_instance);
+    return get_or_create_frame(amap, frame, num_nodes, num_cameras);
 }
 
 // Keys for the box tools: plain presses only, so Cmd/Ctrl shortcuts that
@@ -162,7 +149,7 @@ inline void bbox_draw_cursor(const BBoxToolState &state, int cam_idx) {
 
 // Handle bbox input on a focused camera view. Where a box goes: box_target.
 inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap, u32 frame, int cam_idx,
-                              int &active_instance, int num_nodes,
+                              int active_instance, int num_nodes,
                               int num_cameras, int img_w, int img_h) {
     if (!state.enabled) return;
     // A drag belongs to the view it started in; the others leave it alone.
@@ -205,8 +192,8 @@ inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap, u32 fra
         // Skip tiny accidental drags
         if (x2 - x1 < 3 || y2_plot - y1_plot < 3) return;
 
-        auto &fa = box_target(amap, frame, /*class*/ 0, active_instance,
-                              num_nodes, num_cameras);
+        auto &fa = box_target(amap, frame, active_instance, num_nodes,
+                              num_cameras);
         if (cam_idx < (int)fa.cameras.size()) {
             auto &ext = fa.cameras[cam_idx].get_extras();
             ext.bbox_x = x1;

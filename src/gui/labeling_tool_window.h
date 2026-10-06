@@ -98,8 +98,7 @@ inline void DrawLabelingToolWindow(
         };
 
         // ─── Instances in this frame ───
-        // An instance is one of its class (ids restart per class); "instance"
-        // rather than "animal", as the objects need not be animals.
+        // "Instance" rather than "animal": the objects need not be animals.
         // Only shown once a frame holds more than one, so a single-instance
         // project sees nothing new. The selector picks which instance placing,
         // dragging and triangulating apply to; the others draw dimmed.
@@ -115,9 +114,9 @@ inline void DrawLabelingToolWindow(
                     ImGui::PushID(i);
                     const ImVec4 t = instance_tint(i);
                     ImGui::PushStyleColor(ImGuiCol_Text, t);
-                    const std::string lbl = instance_label(
-                        fit->second[(size_t)i], pm.annotation_config.class_names);
-                    if (ImGui::RadioButton(lbl.c_str(), ctx.active_instance == i))
+                    char lbl[16];
+                    snprintf(lbl, sizeof(lbl), "#%d", fit->second[(size_t)i].instance_id);
+                    if (ImGui::RadioButton(lbl, ctx.active_instance == i))
                         ctx.active_instance = i;
                     ImGui::PopStyleColor();
                     ImGui::PopID();
@@ -125,26 +124,21 @@ inline void DrawLabelingToolWindow(
                 ImGui::SameLine();
                 // As on its button -- not its place in the list.
                 ImGui::TextDisabled(
-                    "(editing %s)",
-                    instance_label(fit->second[(size_t)ctx.active_instance],
-                                   pm.annotation_config.class_names).c_str());
+                    "(editing #%d)",
+                    fit->second[(size_t)ctx.active_instance].instance_id);
             }
 
             if (fit != annotations.end() && skeleton.has_skeleton) {
                 if (n > 1) ImGui::SameLine();
                 if (ImGui::SmallButton(ICON_FK_PLUS " Instance")) {
-                    // Another of the class being edited, with the next unused
-                    // id in that class, so ids stay stable even after one is
-                    // removed.
-                    const int cat =
-                        n ? fit->second[(size_t)ctx.active_instance].category_id : 0;
+                    // A new instance gets the next unused id, so ids stay
+                    // stable even after one is removed.
                     int next_id = 0;
                     for (const auto &fa : fit->second)
-                        if (fa.category_id == cat)
-                            next_id = std::max(next_id, fa.instance_id + 1);
+                        next_id = std::max(next_id, fa.instance_id + 1);
                     get_or_create_frame(annotations, (u32)current_frame_num,
                                         skeleton.num_nodes,
-                                        (int)scene->num_cams, next_id, cat);
+                                        (int)scene->num_cams, next_id);
                     ctx.active_instance = (int)fit->second.size() - 1;
                 }
                 if (n > 1) {

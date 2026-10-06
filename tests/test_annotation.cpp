@@ -695,28 +695,14 @@ static void test_obb_contains_rotated() {
 static void test_bbox_classes_and_target() {
     printf("  test_bbox_classes_and_target...\n");
 
-    // A box goes on the instance being edited when it is of the box's class,
-    // not the frame's first.
+    // A box goes on the instance being edited, not the frame's first.
     AnnotationMap amap;
-    get_or_create_frame(amap, 5, 3, 2, /*id*/ 0, /*class*/ 0);
-    get_or_create_frame(amap, 5, 3, 2, /*id*/ 7, /*class*/ 0);
-    int active = 1;
-    EXPECT_EQ(box_target(amap, 5, 0, active, 3, 2).instance_id, 7);
-    EXPECT_EQ(active, 1);
-    // Another class: a new instance of it, numbered from 0 in that class,
-    // and it becomes the one being edited.
-    active = 0;
-    FrameAnnotation &rat = box_target(amap, 5, 1, active, 3, 2);
-    EXPECT_EQ(rat.category_id, 1);
-    EXPECT_EQ(rat.instance_id, 0);
-    EXPECT_EQ(active, 2);
-    EXPECT_EQ((int)amap[5].size(), 3);
-    // Class 1 #0 now exists: editing class 0 #0 and boxing class 1 finds it.
-    active = 0;
-    EXPECT_EQ(&box_target(amap, 5, 1, active, 3, 2), &amap[5][2]);
-    // A frame with no instances gets a first one, of the box's class.
-    active = 0;
-    EXPECT_EQ(box_target(amap, 9, 1, active, 3, 2).category_id, 1);
+    get_or_create_frame(amap, 5, 3, 2, /*instance_id*/ 0);
+    get_or_create_frame(amap, 5, 3, 2, /*instance_id*/ 7);
+    EXPECT_EQ(box_target(amap, 5, 1, 3, 2).instance_id, 7);
+    EXPECT_EQ(box_target(amap, 5, 0, 3, 2).instance_id, 0);
+    // A frame with no instances gets a first one.
+    EXPECT_EQ(box_target(amap, 9, 1, 3, 2).instance_id, 0);
     EXPECT_EQ((int)amap[9].size(), 1);
 }
 
@@ -2254,22 +2240,21 @@ static void test_keypoint_clipboard_ops() {
     EXPECT_FALSE(kc.any());
 }
 
-// An instance is (class, id): "Class_0 #0" and "Class_1 #0" are two
-// instances, and the v4 CSVs keep them apart through a save and load.
+// Instances survive a CSV save and load by id; a v4 file (a build that
+// briefly wrote a class column) and a v3 one both still read.
 static void test_csv_class_and_instance() {
     printf("  test_csv_class_and_instance...\n");
     namespace fs = std::filesystem;
-    const fs::path root = fs::temp_directory_path() / "red_test_csv_v4";
+    const fs::path root = fs::temp_directory_path() / "red_test_csv_instances";
     fs::remove_all(root);
     fs::create_directories(root);
 
     AnnotationMap amap;
-    get_or_create_frame(amap, 2, 1, 1, /*id*/ 0, /*class*/ 0);
-    get_or_create_frame(amap, 2, 1, 1, /*id*/ 0, /*class*/ 1);
-    EXPECT_EQ((int)amap[2].size(), 2);
+    get_or_create_frame(amap, 2, 1, 1, 0);
+    get_or_create_frame(amap, 2, 1, 1, 3);
     // (Looked up after both exist: adding one moves the others.)
-    auto &a = *find_instance(amap[2], 0, 0);
-    auto &b = *find_instance(amap[2], 0, 1);
+    auto &a = *find_instance(amap[2], 0);
+    auto &b = *find_instance(amap[2], 3);
     a.cameras[0].keypoints[0].x = 10; a.cameras[0].keypoints[0].y = 11;
     a.cameras[0].keypoints[0].has_pos = true; a.cameras[0].keypoints[0].set_manual();
     b.cameras[0].keypoints[0].x = 20; b.cameras[0].keypoints[0].y = 21;
@@ -2279,27 +2264,27 @@ static void test_csv_class_and_instance() {
     const std::string folder = AnnotationCSV::save_all(
         root.string(), "s", amap, 1, 1, {"Cam0"}, &err);
     EXPECT_FALSE(folder.empty());
-
     AnnotationMap back;
     EXPECT_EQ(AnnotationCSV::load_all(folder, back, "s", 1, 1, {"Cam0"}, err), 0);
-    EXPECT_EQ((int)back[2].size(), 2);
-    const FrameAnnotation *ra = find_instance(back[2], 0, 0);
-    const FrameAnnotation *rb = find_instance(back[2], 0, 1);
+    const FrameAnnotation *ra = find_instance(back[2], 0);
+    const FrameAnnotation *rb = find_instance(back[2], 3);
     EXPECT_TRUE(ra && rb);
     if (ra && rb) {
         EXPECT_NEAR(ra->cameras[0].keypoints[0].x, 10.0, 1e-9);
         EXPECT_NEAR(rb->cameras[0].keypoints[0].x, 20.0, 1e-9);
     }
 
-    // A v3 file (instance, no class) still loads, as class 0.
-    {
-        std::ofstream f(root / "v3.csv");
-        f << "#red_csv v3\n#skeleton s\nframe,instance,x0,y0,c0,s0\n4,3,5,6,,\n";
+    for (const char *hdr : {"frame,instance,x0,y0,c0,s0\n4,3,5,6,,\n",
+                            "frame,class,instance,x0,y0,c0,s0\n4,0,3,5,6,,\n"}) {
+        {
+            std::ofstream f(root / "old.csv");
+            f << "#red_csv v3\n#skeleton s\n" << hdr;
+        }
+        AnnotationMap old;
+        EXPECT_TRUE(AnnotationCSV::load_2d_csv((root / "old.csv").string(), old, 0, 1, 1, err));
+        const FrameAnnotation *r = find_instance(old[4], 3);
+        EXPECT_TRUE(r && r->cameras[0].keypoints[0].x == 5);
     }
-    AnnotationMap v3;
-    EXPECT_TRUE(AnnotationCSV::load_2d_csv((root / "v3.csv").string(), v3, 0, 1, 1, err));
-    const FrameAnnotation *r3 = find_instance(v3[4], 3, 0);
-    EXPECT_TRUE(r3 && r3->cameras[0].keypoints[0].x == 5);
     fs::remove_all(root);
 }
 

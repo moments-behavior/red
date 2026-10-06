@@ -254,10 +254,8 @@ struct MidlineConstraint {
 // ── All annotations for one frame ──
 struct FrameAnnotation {
     u32 frame_number = 0;
-    // Identity is the pair: the class, and which one of that class (ids count
-    // from 0 within each class -- "mouse #0" and "rat #0" are two animals).
-    int instance_id  = 0;   // which one of its class (multi-animal tracking)
-    int category_id  = 0;   // class index
+    int instance_id  = 0;   // object identity (for multi-animal tracking)
+    int category_id  = 0;   // class index (one class for now: always 0)
 
     // Optional single-view midline solve constraint for this frame.
     MidlineConstraint midline;
@@ -321,37 +319,20 @@ inline FrameAnnotation make_frame(int num_nodes, int num_cameras, u32 frame_numb
 // default to the first. A caller that means "the animal being labelled" passes
 // the active instance; a caller that means "every animal" iterates.
 
-// The animal with this class and id, or nullptr. Prefer this to indexing:
-// the identity is stable across frames, the index is not.
-inline FrameAnnotation *find_instance(FrameInstances &fis, int instance_id,
-                                      int category_id = 0) {
+// The instance with this id, or nullptr. Prefer this to indexing: the id is
+// stable across frames, the index is not.
+inline FrameAnnotation *find_instance(FrameInstances &fis, int instance_id) {
     for (auto &fa : fis)
-        if (fa.instance_id == instance_id && fa.category_id == category_id) return &fa;
+        if (fa.instance_id == instance_id) return &fa;
     return nullptr;
 }
-inline const FrameAnnotation *find_instance(const FrameInstances &fis, int instance_id,
-                                            int category_id = 0) {
+inline const FrameAnnotation *find_instance(const FrameInstances &fis, int instance_id) {
     for (const auto &fa : fis)
-        if (fa.instance_id == instance_id && fa.category_id == category_id) return &fa;
+        if (fa.instance_id == instance_id) return &fa;
     return nullptr;
 }
 
-// How the UI names an instance: "Class_0 #1", or "#1" while there are no
-// classes (a keypoints-only project).
-inline std::string instance_label(const FrameAnnotation &fa,
-                                  const std::vector<std::string> &classes) {
-    std::string s;
-    if (fa.category_id >= 0 && fa.category_id < (int)classes.size())
-        s = classes[(size_t)fa.category_id] + " ";
-    return s + "#" + std::to_string(fa.instance_id);
-}
 
-// The lowest id no animal of this class has on the frame.
-inline int next_free_instance_id(const FrameInstances &fis, int category_id) {
-    int id = 0;
-    while (find_instance(fis, id, category_id)) ++id;
-    return id;
-}
 
 // The frame's instances, or an empty list if the frame has none.
 inline const FrameInstances &instances_at(const AnnotationMap &amap, u32 frame) {
@@ -368,10 +349,8 @@ inline const FrameInstances &instances_at(const AnnotationMap &amap, u32 frame) 
 
 // Whether camera `cam` holds the same 2D keypoints and boxes, for every animal.
 inline bool view_labels_equal(const FrameInstances *a, const FrameInstances *b, size_t cam) {
-    auto view_of = [cam](const FrameInstances *fis, const FrameAnnotation &who)
-        -> const CameraAnnotation * {
-        const FrameAnnotation *fa =
-            fis ? find_instance(*fis, who.instance_id, who.category_id) : nullptr;
+    auto view_of = [cam](const FrameInstances *fis, int id) -> const CameraAnnotation * {
+        const FrameAnnotation *fa = fis ? find_instance(*fis, id) : nullptr;
         return fa && cam < fa->cameras.size() ? &fa->cameras[cam] : nullptr;
     };
     auto same = [](const CameraAnnotation *x, const CameraAnnotation *y) {
@@ -400,16 +379,14 @@ inline bool view_labels_equal(const FrameInstances *a, const FrameInstances *b, 
     for (const FrameInstances *fis : {a, b})
         if (fis)
             for (const FrameAnnotation &fa : *fis)
-                if (!same(view_of(a, fa), view_of(b, fa))) return false;
+                if (!same(view_of(a, fa.instance_id), view_of(b, fa.instance_id))) return false;
     return true;
 }
 
 // Whether every animal has the same 3D points.
 inline bool frame_3d_equal(const FrameInstances *a, const FrameInstances *b) {
-    auto pts = [](const FrameInstances *fis, const FrameAnnotation &who)
-        -> const std::vector<Keypoint3D> * {
-        const FrameAnnotation *fa =
-            fis ? find_instance(*fis, who.instance_id, who.category_id) : nullptr;
+    auto pts = [](const FrameInstances *fis, int id) -> const std::vector<Keypoint3D> * {
+        const FrameAnnotation *fa = fis ? find_instance(*fis, id) : nullptr;
         return fa ? &fa->kp3d : nullptr;
     };
     auto same = [](const std::vector<Keypoint3D> *x, const std::vector<Keypoint3D> *y) {
@@ -428,19 +405,19 @@ inline bool frame_3d_equal(const FrameInstances *a, const FrameInstances *b) {
     for (const FrameInstances *fis : {a, b})
         if (fis)
             for (const FrameAnnotation &fa : *fis)
-                if (!same(pts(a, fa), pts(b, fa))) return false;
+                if (!same(pts(a, fa.instance_id), pts(b, fa.instance_id))) return false;
     return true;
 }
 
 // Get-or-create a FrameAnnotation with default sizes
-// Get-or-create one animal's annotation for a frame. Defaults to class 0 #0,
+// Get-or-create one animal's annotation for a frame. Defaults to instance 0,
 // which is every existing project and every caller that predates multi-animal.
 inline FrameAnnotation &get_or_create_frame(AnnotationMap &amap, u32 frame,
                                             int num_nodes, int num_cameras,
-                                            int instance_id = 0, int category_id = 0) {
+                                            int instance_id = 0) {
     FrameInstances &fis = amap[frame];
-    if (FrameAnnotation *fa = find_instance(fis, instance_id, category_id)) return *fa;
-    fis.push_back(make_frame(num_nodes, num_cameras, frame, instance_id, category_id));
+    if (FrameAnnotation *fa = find_instance(fis, instance_id)) return *fa;
+    fis.push_back(make_frame(num_nodes, num_cameras, frame, instance_id));
     return fis.back();
 }
 
@@ -695,17 +672,12 @@ inline void annotations_from_json(const nlohmann::json &root, AnnotationMap &ama
         // Match the instance this record belongs to. A v2 file written before
         // multi-animal has one record per frame with instance_id 0, which is
         // also what the CSV loader created, so it lands on the right one.
-        // Labels from before class was part of an animal's identity have
-        // class-less CSV rows, loaded as class 0, and one record per id here:
-        // when the exact animal is not there, the class-0 one with this id is
-        // it, and takes its class from this record. (Newer CSVs carry every
-        // animal's class, so the exact match is always there.)
         const int inst = jf.contains("instance_id") ? jf["instance_id"].get<int>() : 0;
-        const int cat = jf.contains("category_id") ? jf["category_id"].get<int>() : 0;
-        FrameAnnotation *fap = find_instance(it->second, inst, cat);
-        if (!fap && (fap = find_instance(it->second, inst, 0))) fap->category_id = cat;
+        FrameAnnotation *fap = find_instance(it->second, inst);
         if (!fap) continue;
         auto &fa = *fap;
+        if (jf.contains("category_id"))
+            fa.category_id = jf["category_id"].get<int>();
         if (jf.contains("needs_improvement"))
             fa.needs_improvement = jf["needs_improvement"].get<bool>();
 
