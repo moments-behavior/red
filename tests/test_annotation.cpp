@@ -2428,6 +2428,7 @@ static void test_absent_mark() {
         if (fs::exists(p)) empty_label = fs::file_size(p) == 0;
     }
     EXPECT_TRUE(empty_label);
+    EXPECT_TRUE(status.find("Note:") == std::string::npos);   // nothing undecided
     // cam1 has nothing on that frame, not even an absent mark: no label file
     // (and no image), rather than a false background.
     bool cam1_label = false;
@@ -2435,6 +2436,18 @@ static void test_absent_mark() {
         cam1_label |= fs::exists(fs::path(fix.output_dir) / "labels" / split / "cam1" /
                                  "Frame_300.txt");
     EXPECT_FALSE(cam1_label);
+
+    // A second instance, boxed on cam0, while #0 there is neither boxed nor
+    // absent: exported as is, with a note saying so.
+    set_absent(fix.amap[300].front().cameras[0], false);
+    get_or_create_frame(fix.amap, 300, 3, 2, 1);
+    {
+        auto &e1 = find_instance(fix.amap[300], 1)->cameras[0].get_extras();
+        e1.bbox_x = 10; e1.bbox_y = 10; e1.bbox_w = 20; e1.bbox_h = 20; e1.has_bbox = true;
+    }
+    EXPECT_TRUE(ExportFormats::export_yolo(fix.cfg, fix.amap, false, &status));
+    EXPECT_TRUE(status.find("1 camera view has an instance with neither") !=
+                std::string::npos);
 }
 
 int main() {

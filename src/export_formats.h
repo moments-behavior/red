@@ -423,6 +423,10 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
     // where someone said so. Their images are extracted with the frame's
     // others and removed after.
     std::vector<std::string> unlabelled_images;
+    // Written views where an instance has neither a box (or keypoints) nor an
+    // absent mark: YOLO reads the missing line as "nothing there". Exported
+    // as they are; the status says how many, so they can be finished.
+    int incomplete_views = 0;
     auto write_split = [&](const std::vector<u32> &frames, const std::string &split) {
         for (int ci = 0; ci < (int)cfg.camera_names.size(); ++ci) {
             const auto &cam_name = cfg.camera_names[ci];
@@ -500,8 +504,19 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
                 } // instances
 
                 const std::string text = lbl.str();
-                if (!text.empty() || absent_here)
+                if (!text.empty() || absent_here) {
                     std::ofstream(lbl_dir + "/" + fname + ".txt") << text;
+                    for (const auto &fa : it->second) {
+                        if (ci >= (int)fa.cameras.size()) continue;
+                        const auto &c = fa.cameras[ci];
+                        bool kp = false;
+                        for (const auto &k : c.keypoints) kp = kp || k.usable();
+                        if (!c.has_bbox() && !c.is_absent() && !kp) {
+                            ++incomplete_views;
+                            break;
+                        }
+                    }
+                }
                 else
                     unlabelled_images.push_back(img_dir + "/" + fname + ".jpg");
             }
@@ -553,9 +568,15 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
     }
 
     std::string fmt = include_keypoints ? "YOLO Pose" : "YOLO Detection";
-    if (status)
+    if (status) {
         *status = fmt + " export complete: " + std::to_string(train.size()) +
                   " train, " + std::to_string(val.size()) + " val frames";
+        if (incomplete_views > 0)
+            *status += ". Note: " + std::to_string(incomplete_views) + " camera view" +
+                       (incomplete_views == 1 ? " has" : "s have") +
+                       " an instance with neither a box nor an absent mark; YOLO "
+                       "will treat it as background there.";
+    }
     return true;
 }
 
