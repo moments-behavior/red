@@ -831,12 +831,14 @@ constexpr int kW = 640, kH = 480;
 // [0,kW] x [0,kH]. The plot sees the pointer from the frame after it moves
 // there, so a test hovers for two frames before acting.
 template <typename Body>
-void frame(BBoxToolState &st, ImVec2 mouse, bool down, bool shift, Body body) {
+void frame(BBoxToolState &st, ImVec2 mouse, bool down, bool shift, Body body,
+           bool right_down = false) {
     ImGuiIO &io = ImGui::GetIO();
     io.AddKeyEvent(ImGuiMod_Shift, shift);
     io.AddKeyEvent(ImGuiKey_LeftShift, shift);
     io.AddMousePosEvent(mouse.x, mouse.y);
     io.AddMouseButtonEvent(0, down);
+    io.AddMouseButtonEvent(1, right_down);
     ImGui::NewFrame();
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(io.DisplaySize);
@@ -940,6 +942,30 @@ static void test_bbox_ui_drag_edge_and_label() {
     EXPECT_NEAR(e.bbox_h, h0, 1e-9);
 }
 
+static void test_bbox_ui_right_click_menu() {
+    printf("  test_bbox_ui_right_click_menu...\n");
+    using namespace bbox_ui;
+    Headless ui;
+    BBoxToolState st;
+    LabelInfo info;
+    AnnotationMap amap = one_box();
+    int active = 0;
+    bool open = false;
+    auto input = [&] {
+        bbox_handle_input(st, info, amap, 0, 0, active, 1, 1, kW, kH);
+        bbox_draw_menu(st, info, amap, 0, 0, active);
+        open = ImGui::IsPopupOpen("##box_menu");
+    };
+    const ImVec2 in = px(st, 200, 200);
+    frame(st, in, false, false, input);
+    frame(st, in, false, false, input);
+    EXPECT_FALSE(open);
+    frame(st, in, false, false, input, /*right*/ true);
+    frame(st, in, false, false, input);
+    EXPECT_TRUE(open);
+    EXPECT_TRUE(st.menu_instance == 0 && st.menu_cam == 0);
+}
+
 int main() {
     test_current_date_time();
 
@@ -955,6 +981,7 @@ int main() {
     test_untitled_save_problem();
     test_bbox_ui_draw_over_box();
     test_bbox_ui_drag_edge_and_label();
+    test_bbox_ui_right_click_menu();
 
     // Transport bar + UI overhaul tests
     test_transport_bar_state_defaults();

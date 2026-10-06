@@ -1600,6 +1600,8 @@ int main(int argc, char **argv) {
                                                   iw, ih);
                                 bbox_draw_cursor(win.bbox, label_info, annotations,
                                                  frame, j, active_instance);
+                                bbox_draw_menu(win.bbox, label_info, annotations,
+                                               frame, j, active_instance);
                             }
                             if (display.show_bboxes) {
                                 bbox_draw_overlays(win.bbox, label_info,

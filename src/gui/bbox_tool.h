@@ -46,6 +46,12 @@ struct BBoxToolState {
     int edge_instance = -1;
     bool resizing = false;      // dragging edge_mask's edges
     double grab_dx = 0, grab_dy = 0;   // kEdgeMove: pointer to the box's top-left
+
+    // Right-click menu on a box: which camera, frame and instance it is for.
+    bool open_menu = false;     // open it this frame (in that camera's plot)
+    int menu_cam = -1;
+    u32 menu_frame = 0;
+    int menu_instance = -1;
 };
 
 // A box's edges, as bits, in screen terms (T is the edge drawn on top);
@@ -495,6 +501,13 @@ inline void bbox_handle_input(BBoxToolState &state,
     // both keys for itself.
     if (state.hovered) {
         mark_box_hovered();
+        // Right-click: the box's menu (a keypoint keeps its own).
+        if (!keypoint_hovered_now() && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            state.open_menu = true;
+            state.menu_cam = cam_idx;
+            state.menu_frame = frame;
+            state.menu_instance = state.hovered_instance;
+        }
         auto &fa = it->second[(size_t)state.hovered_instance];
         // Either way that instance becomes the one being edited, ready to
         // draw its box again.
@@ -509,6 +522,55 @@ inline void bbox_handle_input(BBoxToolState &state,
             state.hovered = false;
         }
     }
+}
+
+// The right-click menu on a box. Call every frame inside each camera's plot,
+// after bbox_handle_input (the popup lives in the plot's ID scope).
+inline void bbox_draw_menu(BBoxToolState &state, LabelInfo &classes,
+                           AnnotationMap &amap, u32 frame, int cam_idx,
+                           int &active_instance) {
+    if (cam_idx != state.menu_cam) return;
+    if (state.open_menu) {
+        ImGui::OpenPopup("##box_menu");
+        state.open_menu = false;
+    }
+    if (!ImGui::BeginPopup("##box_menu")) return;
+    auto it = amap.find(frame);
+    const bool valid = frame == state.menu_frame && it != amap.end() &&
+                       state.menu_instance >= 0 &&
+                       state.menu_instance < (int)it->second.size() &&
+                       cam_idx < (int)it->second[(size_t)state.menu_instance].cameras.size();
+    if (!valid) {   // the frame moved on under it
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+    FrameAnnotation &fa = it->second[(size_t)state.menu_instance];
+    ImGui::TextDisabled("%s", box_label(classes, fa).c_str());
+    if (ImGui::MenuItem("Edit this instance", nullptr,
+                        active_instance == state.menu_instance))
+        active_instance = state.menu_instance;
+    if (classes.names.size() > 1 && ImGui::BeginMenu("Class")) {
+        for (int c = 0; c < (int)classes.names.size(); ++c) {
+            ImGui::PushID(c);
+            if (ImGui::MenuItem(classes.names[(size_t)c].c_str(), nullptr,
+                                fa.category_id == c))
+                fa.category_id = c;
+            ImGui::PopID();
+        }
+        ImGui::EndMenu();
+    }
+    ImGui::Separator();
+    if (ImGui::MenuItem("Delete box", "R")) {
+        fa.cameras[(size_t)cam_idx].get_extras().has_bbox = false;
+        active_instance = state.menu_instance;
+    }
+    if (ImGui::MenuItem("Delete on all cameras", "F")) {
+        for (auto &cam : fa.cameras)
+            if (cam.has_bbox()) cam.get_extras().has_bbox = false;
+        active_instance = state.menu_instance;
+    }
+    ImGui::EndPopup();
 }
 
 // Settings panel for the bbox tool

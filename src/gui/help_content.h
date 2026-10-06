@@ -115,6 +115,7 @@ inline const std::vector<Group> &shortcut_groups() {
             {S::COUNT, "Shift + drag", "Draw a box of the selected class: press with Shift held, drag, let go (Esc cancels). It goes on the instance being edited, or starts the next instance if that one already has a box on this camera"},
             {S::COUNT, "R", "Delete the hovered box on this camera (a hovered keypoint takes R first)"},
             {S::COUNT, "F", "Delete the hovered instance's box on all cameras (a hovered keypoint takes F first)"},
+            {S::COUNT, "Right-click", "On a box: a menu to edit its instance, change its class, or delete it"},
         }},
         {"OBB tool", "When the OBB tool is enabled", Gate::ToolObb, {
             {S::COUNT, "G  (\xC3\x97""3)", "Place axis point 1, axis point 2, then the corner"},

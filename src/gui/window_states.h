@@ -111,6 +111,11 @@ struct WindowStates {
         bbox.enabled = true;   // the default, as at startup
         bbox.drawing = false;
         bbox.drawing_cam = -1;
+        bbox.resizing = false;
+        bbox.edge_mask = 0;
+        bbox.edge_cam = -1;
+        bbox.menu_cam = -1;
+        bbox.open_menu = false;
         bbox.editing_class = -1;
         bbox.current_class = 0;
         obb.show = false;
