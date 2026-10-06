@@ -1544,13 +1544,28 @@ int main(int argc, char **argv) {
                                 // active animal draws full strength, the rest
                                 // dimmed.
                                 auto draw_instance = [&](size_t inst) {
+                                    using KC = DisplayState::KeypointColoring;
+                                    std::vector<ImVec4> node_cols;
+                                    if (display.keypoint_coloring == KC::ByInstance)
+                                        node_cols.assign(
+                                            skeleton.num_nodes,
+                                            instance_color(pm.annotation_config.label_info,
+                                                           fis_draw[inst].instance_id,
+                                                           (int)inst));
+                                    else if (display.keypoint_coloring == KC::ByReprojError &&
+                                             j < pm.camera_params.size())
+                                        node_cols = reprojection_error_colors(
+                                            fis_draw[inst], (int)j, skeleton.num_nodes,
+                                            pm.camera_params[j],
+                                            (double)scene->image_height[j]);
                                     if (gui_plot_keypoints(
                                             fis_draw[inst], &skeleton, j,
                                             scene->num_cams,
                                             active_keypoint_color(user_settings),
                                             (int)inst,
                                             (int)inst == active_instance,
-                                            display.show_keypoint_names))
+                                            display.show_keypoint_names,
+                                            node_cols.empty() ? nullptr : &node_cols))
                                         grabbed = (int)inst;
                                 };
                                 for (size_t inst = 0; inst < fis_draw.size(); inst++)
@@ -1665,6 +1680,25 @@ int main(int argc, char **argv) {
                             ImGui::SeparatorText("Visibility");
                             ImGui::Checkbox("Keypoints", &display.show_keypoints);
                             ImGui::Checkbox("Bounding Boxes", &display.show_bboxes);
+                            ImGui::SeparatorText("Keypoint Colours");
+                            using KC = DisplayState::KeypointColoring;
+                            auto &kc = display.keypoint_coloring;
+                            if (ImGui::RadioButton("By keypoint", kc == KC::ByNode))
+                                kc = KC::ByNode;
+                            if (ImGui::RadioButton("By instance", kc == KC::ByInstance))
+                                kc = KC::ByInstance;
+                            // Needs a calibration to project the 3D points.
+                            ImGui::BeginDisabled(project_is_2d(pm));
+                            if (ImGui::RadioButton("By reprojection error",
+                                                   kc == KC::ByReprojError))
+                                kc = KC::ByReprojError;
+                            ImGui::EndDisabled();
+                            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                                ImGui::SetTooltip(
+                                    "Placed vs. where the 3D point projects (T to "
+                                    "triangulate):\ngreen <= %.0f px, yellow <= %.0f px, "
+                                    "red above, grey without 3D.",
+                                    kReprojGoodPx, kReprojBadPx);
                             ImGui::EndPopup();
                         }
 

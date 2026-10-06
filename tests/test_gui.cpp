@@ -966,6 +966,36 @@ static void test_bbox_ui_right_click_menu() {
     EXPECT_TRUE(st.menu_instance == 0 && st.menu_cam == 0);
 }
 
+// Keypoints coloured by reprojection error: a pinhole camera looking down +z,
+// a 3D point projecting to the principal point, and keypoints placed 0, 3 and
+// 10 px from it -> green, yellow, red; a node without 3D is grey.
+static void test_reprojection_error_colors() {
+    printf("  test_reprojection_error_colors...\n");
+    CameraParams cam;
+    cam.k << 500, 0, 320, 0, 500, 240, 0, 0, 1;
+    const double img_h = 480;
+    FrameAnnotation fa = make_frame(4, 1);
+    // ImPlot coords: y up, so image row 240 is plot y 480 - 240.
+    const double off[] = {0, 3, 10};
+    for (int n = 0; n < 3; ++n) {
+        fa.kp3d[n].x = 0; fa.kp3d[n].y = 0; fa.kp3d[n].z = 10;
+        fa.kp3d[n].set_triangulated();
+        auto &kp = fa.cameras[0].keypoints[n];
+        kp.x = 320 + off[n]; kp.y = img_h - 240; kp.set_manual();
+    }
+    auto &kp3 = fa.cameras[0].keypoints[3];   // placed, but no 3D
+    kp3.x = 100; kp3.y = 100; kp3.set_manual();
+    const auto c = reprojection_error_colors(fa, 0, 4, cam, img_h);
+    EXPECT_TRUE(c.size() == 4);
+    auto is = [](const ImVec4 &a, float r, float g) {
+        return std::fabs(a.x - r) < 0.01f && std::fabs(a.y - g) < 0.01f;
+    };
+    EXPECT_TRUE(is(c[0], 0.25f, 0.9f));   // green
+    EXPECT_TRUE(is(c[1], 1.0f, 0.85f));   // yellow
+    EXPECT_TRUE(is(c[2], 1.0f, 0.25f));   // red
+    EXPECT_TRUE(is(c[3], 0.6f, 0.6f));    // grey
+}
+
 int main() {
     test_current_date_time();
 
@@ -982,6 +1012,7 @@ int main() {
     test_bbox_ui_draw_over_box();
     test_bbox_ui_drag_edge_and_label();
     test_bbox_ui_right_click_menu();
+    test_reprojection_error_colors();
 
     // Transport bar + UI overhaul tests
     test_transport_bar_state_defaults();

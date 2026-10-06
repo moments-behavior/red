@@ -28,6 +28,10 @@ struct DisplayState {
     bool show_keypoints = true;
     bool show_keypoint_names = false;
     bool show_bboxes = true;
+    // How keypoints are coloured: each node its own colour, all of an
+    // instance's in its colour (as its box), or by reprojection error.
+    enum class KeypointColoring { ByNode, ByInstance, ByReprojError };
+    KeypointColoring keypoint_coloring = KeypointColoring::ByNode;
 };
 
 struct AppContext {

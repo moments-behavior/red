@@ -95,7 +95,12 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                                int view_idx, int num_cams,
                                ImVec4 active_color = ImVec4(1, 1, 1, 1),
                                int instance = 0, bool is_active = true,
-                               bool show_names = false) {
+                               bool show_names = false,
+                               // Per-node colours to use instead of the
+                               // skeleton's (by instance, by reprojection
+                               // error); the active keypoint keeps
+                               // active_color.
+                               const std::vector<ImVec4> *node_override = nullptr) {
     if (view_idx >= (int)fa.cameras.size()) return false;
     auto &cam = fa.cameras[view_idx];
     bool touched = false;
@@ -159,6 +164,8 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
             const bool node_is_active = (cam.active_id == node);
             ImVec4 c = node_is_active
                            ? active_color
+                           : node_override && node < node_override->size()
+                                 ? (*node_override)[node]
                            : (node < skeleton->node_colors.size()
                                   ? skeleton->node_colors.at(node)
                                   : ImVec4(1, 1, 1, 1));
@@ -248,7 +255,9 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                 node_color = active_color; // active keypoint: user-selected color
                 pt_size = 8.0f;
             } else {
-                node_color = skeleton->node_colors.at(node);
+                node_color = node_override && node < node_override->size()
+                                 ? (*node_override)[node]
+                                 : skeleton->node_colors.at(node);
                 pt_size = 6.0f;
             }
             node_color.w = 0.9f;
@@ -715,6 +724,40 @@ inline bool solve_midline_constraint(FrameAnnotation &fa,
     else
         status = oss.str();
     return true;
+}
+
+// Reprojection-error colours for one camera's keypoints: the distance in
+// pixels between where a keypoint was placed and where its instance's 3D
+// point projects in that camera. Green up to kReprojGoodPx, yellow up to
+// kReprojBadPx, red above; grey with no 3D point (or no position).
+constexpr double kReprojGoodPx = 2.0, kReprojBadPx = 5.0;
+inline std::vector<ImVec4> reprojection_error_colors(const FrameAnnotation &fa,
+                                                     int view_idx, int num_nodes,
+                                                     const CameraParams &cam,
+                                                     double img_h) {
+    const ImVec4 grey(0.6f, 0.6f, 0.6f, 1.0f), green(0.25f, 0.9f, 0.3f, 1.0f),
+        yellow(1.0f, 0.85f, 0.2f, 1.0f), red(1.0f, 0.25f, 0.2f, 1.0f);
+    std::vector<ImVec4> out((size_t)std::max(num_nodes, 0), grey);
+    if (view_idx >= (int)fa.cameras.size()) return out;
+    const auto &kps = fa.cameras[(size_t)view_idx].keypoints;
+    for (int n = 0; n < num_nodes; ++n) {
+        if (n >= (int)kps.size() || n >= (int)fa.kp3d.size()) break;
+        const auto &kp = kps[(size_t)n];
+        const auto &p3 = fa.kp3d[(size_t)n];
+        if (!kp.usable() || !p3.exist) continue;
+        const Eigen::Vector3d X(p3.x, p3.y, p3.z);
+        const Eigen::Vector2d proj =
+            cam.telecentric
+                ? red_math::projectPointTelecentric(X, cam.projection_mat, cam.k,
+                                                    cam.dist_coeffs, cam.dist_center)
+                : red_math::projectPointR(X, cam.r, cam.tvec, cam.k, cam.dist_coeffs);
+        const double err = (proj - Eigen::Vector2d(kp.x, img_h - kp.y)).norm();
+        out[(size_t)n] = !std::isfinite(err) ? grey
+                         : err <= kReprojGoodPx ? green
+                         : err <= kReprojBadPx  ? yellow
+                                                : red;
+    }
+    return out;
 }
 
 inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
