@@ -136,7 +136,14 @@ inline void DrawSwitchSkeletonWindow(SwitchSkeletonState &st, AppContext &ctx) {
 
         int mode = st.load_from_json ? 0 : 1;
         ImGui::SetNextItemWidth(120);
-        if (ImGui::Combo("Mode##switch_skel_mode", &mode, "File\0Preset\0")) {
+        // A third entry, so drawing a new one is found from either mode: it
+        // opens the Skeleton Creator and goes to File, where the save lands.
+        if (ImGui::Combo("Mode##switch_skel_mode", &mode,
+                         "File\0Preset\0New skeleton...\0")) {
+            if (mode == 2) {
+                st.skeleton_wait = open_skeleton_creator_for(ctx);
+                mode = 0;
+            }
             st.load_from_json = (mode == 0);
         }
 

@@ -316,8 +316,16 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
                 }
             }
             ImGui::TableSetColumnIndex(2);
+            // File / Preset, and a third entry so drawing a new one is found
+            // from either: it opens the Skeleton Creator and goes to File,
+            // where the saved skeleton lands.
             ImGui::SetNextItemWidth(90.0f);
-            if (ImGui::Combo("##annot_skel_mode", &skel_mode, "File\0Preset\0")) {
+            if (ImGui::Combo("##annot_skel_mode", &skel_mode,
+                             "File\0Preset\0New skeleton...\0")) {
+                if (skel_mode == 2) {
+                    state.skeleton_wait = open_skeleton_creator_for(ctx);
+                    skel_mode = 0;
+                }
                 pm.load_skeleton_from_json = (skel_mode == 0);
                 if (pm.load_skeleton_from_json)
                     pm.skeleton_name.clear();
