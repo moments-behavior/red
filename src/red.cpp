@@ -408,7 +408,8 @@ int main(int argc, char **argv) {
     ps.realtime_playback = user_settings.default_realtime_playback;
     DisplayState display;
     // Brightness / contrast start neutral (DisplayState's defaults) and are
-    // set in the transport bar.
+    // set in the transport bar; how contrast pivots is a saved preference.
+    display.pivot_midgray = user_settings.default_pivot_midgray;
 
     // variables for project management
     ProjectManager pm = ProjectManager();

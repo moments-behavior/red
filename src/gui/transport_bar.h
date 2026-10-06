@@ -584,7 +584,7 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     if (ImGui::Button("Reset##display")) {
         display.contrast = 1.0f;
         display.brightness = 0;
-        display.pivot_midgray = true;
+        display.pivot_midgray = ctx.user_settings.default_pivot_midgray;
     }
 
 #ifndef __APPLE__

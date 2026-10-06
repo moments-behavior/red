@@ -81,8 +81,18 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
                 ImGui::GetStyle().FontScaleMain = 1.0f;
                 other_changed = true;
             }
-            // Brightness / contrast are not here: they are adjusted live in
-            // the transport bar, and every session starts neutral.
+            // Brightness / contrast are adjusted live in the transport bar,
+            // starting neutral each session. How contrast behaves is a
+            // preference, kept here: stretch around mid-gray (darks darker,
+            // lights lighter) or scale from black.
+            if (ImGui::Checkbox("Contrast pivots on mid-gray", &s.default_pivot_midgray)) {
+                ctx.display.pivot_midgray = s.default_pivot_midgray;
+                other_changed = true;
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("On: contrast stretches values away from mid-gray, "
+                                  "keeping overall brightness.\nOff: it scales from "
+                                  "black, so more contrast also brightens.");
         }
 
         // --- Keypoint Colors ---

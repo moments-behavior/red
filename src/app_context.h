@@ -439,6 +439,7 @@ inline void close_project(AppContext &ctx, bool save_labels = true) {
 
     // 7. Reset display state (project-specific: different videos need different settings)
     ctx.display = DisplayState{};
+    ctx.display.pivot_midgray = ctx.user_settings.default_pivot_midgray;
 
     // 8. Reset frame state
     ctx.current_frame_num = 0;
