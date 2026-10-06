@@ -159,9 +159,9 @@ inline const std::vector<Tool> &tools() {
     static const std::vector<Tool> v = [] {
         std::vector<Tool> t = {
             // Projects
-            {"Create Annotation Project", "Annotate menu / Welcome",
+            {"Create Annotation Project", "File menu / Welcome > Create Project",
                 "Define a new project over per-camera videos: skeleton, camera model, calibration.", Gate::Always, "A loaded video/folder"},
-            {"Load Project", "File > Load Project",
+            {"Load Project", "File > Load Annotation Project / Welcome",
                 "Open an annotation .redproj.", Gate::Always, "\xE2\x80\x94"},
             {"Switch Skeleton", "File > Switch Skeleton\xE2\x80\xA6",
                 "Change an open project's skeleton.", Gate::Always, "No manual labels yet (re-indexes keypoints)"},
@@ -200,7 +200,7 @@ inline const std::vector<Tool> &tools() {
 inline const std::vector<Workflow> &workflows() {
     static const std::vector<Workflow> w = {
         {"Create an annotation project", {
-            "Welcome > Create Annotation Project (or File > Create Annotation Project).",
+            "Welcome > Create Project (or File > Create Annotation Project).",
             "Pick the video folder \xE2\x80\x94 RED auto-discovers one .mp4 or .avi per camera.",
             "Choose the skeleton (preset or a .json file).",
             "For several cameras: calibrated (camera model and calibration folder) or not calibrated (2D only).",

@@ -62,8 +62,28 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
         float spacing = 10.0f;
         float start_x = (avail - 2 * btn_w - spacing) * 0.5f;
 
+        // Making or opening a project is what red is for: those two first.
         ImGui::SetCursorPosX(start_x);
-        if (ImGui::Button("Open Videos", ImVec2(btn_w, 30))) {
+        if (ImGui::Button("Create Project", ImVec2(btn_w, 30)))
+            win.annotation.open();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Pick the videos or images, the cameras and a\n"
+                              "skeleton, and start labeling.");
+        ImGui::SameLine(0, spacing);
+        if (ImGui::Button("Load Project", ImVec2(btn_w, 30))) {
+            IGFD::FileDialogConfig cfg;
+            cfg.countSelectionMax = 1;
+            cfg.path = default_project_root(ctx.user_settings, ctx.default_dir);
+            cfg.flags = ImGuiFileDialogFlags_Modal;
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "ChooseProject", "Load Project",
+                "Red Project{.redproj}", cfg);
+        }
+
+        // Just watch: videos without a project (no labels saved).
+        ImGui::Spacing();
+        ImGui::SetCursorPosX(start_x);
+        if (ImGui::Button("Open Videos", ImVec2(2 * btn_w + spacing, 30))) {
             IGFD::FileDialogConfig cfg;
             cfg.countSelectionMax = 0;
             cfg.path = media_browse_dir(ctx);
@@ -72,25 +92,16 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
                 "ChooseMedia", "Select Video(s)",
                 video_ext_filter(), cfg);
         }
-        ImGui::SameLine(0, spacing);
-        if (ImGui::Button("Load Project", ImVec2(btn_w, 30))) {
-            IGFD::FileDialogConfig cfg;
-            cfg.countSelectionMax = 1;
-            cfg.flags = ImGuiFileDialogFlags_Modal;
-            ImGuiFileDialog::Instance()->OpenDialog(
-                "ChooseProject", "Load Project",
-                "Red Project{.redproj}", cfg);
-        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Play videos without a project.");
 
         // A tailcycle session is not a red project -- it brings its own
         // cameras, calibration and skeleton -- but opening one is the same
-        // kind of act as loading a project, so it belongs up here rather than
-        // fourth in the Annotate list, where it was easy to miss. Full width
+        // kind of act as loading a project, so it belongs up here. Full width
         // because the name does not fit a 150px button.
         if (TailcycleImport::available()) {
             ImGui::Spacing();
-            // The SameLine above ended, so the cursor is back at the left
-            // content edge; line it up under the two buttons.
+            // Line it up under the buttons above.
             ImGui::SetCursorPosX(start_x);
             ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
             if (ImGui::Button("Open tailcycle Dataset",
@@ -106,32 +117,6 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
                     "sessions. Brings its own cameras and skeleton.");
         }
     }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    // Annotate section
-    ImGui::TextColored(ImVec4(0.8f, 0.6f, 0.6f, 1.0f), "Annotate");
-    ImGui::Spacing();
-
-    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0, 0.5f));
-    if (ImGui::Button("Create Annotation Project", ImVec2(-1, 0))) {
-        win.annotation.open();
-    }
-    if (ImGui::Button("Load Annotation Project", ImVec2(-1, 0))) {
-        // The same dialog File > Load Project uses. The old separate
-        // LoadAnnotProject handler only knew how to open an annotation
-        // .redproj, so a tailcycle folder or a legacy calibration project gave
-        // a raw parse error instead of an explanation.
-        IGFD::FileDialogConfig cfg;
-        cfg.countSelectionMax = 1;
-        cfg.flags = ImGuiFileDialogFlags_Modal;
-        ImGuiFileDialog::Instance()->OpenDialog(
-            "ChooseProject", "Load Annotation Project",
-            "Red Project{.redproj}", cfg);
-    }
-    ImGui::PopStyleVar();
 
     // Recent Projects section
     if (!ctx.user_settings.recent_projects.empty()) {
