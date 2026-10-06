@@ -600,6 +600,10 @@ inline void on_project_loaded(AppContext &ctx,
             redproj = ctx.pm.project_path + "/" + ctx.pm.project_name + ".redproj";
         if (!redproj.empty()) {
             ctx.user_settings.push_recent_project(redproj);
+            // Where its folder sits: where project dialogs start next time.
+            const std::string root = std::filesystem::path(redproj)
+                                         .parent_path().parent_path().string();
+            if (!root.empty()) ctx.user_settings.last_project_root = root;
             save_user_settings(ctx.user_settings);
         }
     }

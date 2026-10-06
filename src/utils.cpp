@@ -116,38 +116,13 @@ bool ensure_dir_exists(std::string path_string, std::string *err) {
 
 void prepare_application_folders(std::string &default_dir,
                                  std::string &media_dir) {
-    // Where file dialogs and new projects start when nothing better is known:
-    // the home folder, or what ~/.config/red/config.json says. red keeps its
-    // own files in ~/.config/red; it used to create ~/red_data as a default
-    // project root, skeleton library and layout store, none of which needed a
-    // folder of its own.
-    std::string home_dir = get_home_directory();
-
-    std::filesystem::path config_path =
-        std::filesystem::path(home_dir) / ".config/red/config.json";
-    std::error_code ec;
-    if (std::filesystem::exists(config_path, ec)) {
-        try {
-            std::ifstream f(config_path);
-            nlohmann::json j;
-            f >> j;
-
-            if (j.contains("media_folder") && j["media_folder"].is_string()) {
-                media_dir = j["media_folder"].get<std::string>();
-            }
-
-            if (j.contains("project_folder") &&
-                j["project_folder"].is_string()) {
-                default_dir = j["project_folder"].get<std::string>();
-            }
-        } catch (const std::exception &e) {
-            std::cerr << "Failed to read/parse config.json: " << e.what()
-                      << std::endl;
-        }
-    }
-
-    if (default_dir.empty()) default_dir = home_dir;
-    if (media_dir.empty()) media_dir = default_dir;
+    // Where file dialogs start when nothing better is known: the home folder.
+    // The folders the user last used, and the Settings defaults, come first
+    // (default_project_root, media_browse_dir). A ~/.config/red/config.json
+    // with project_folder / media_folder used to feed these too; Settings
+    // replaced it, and it is no longer read.
+    default_dir = get_home_directory();
+    media_dir = default_dir;
 }
 
 void seek_all_cameras(RenderScene *scene, int frame_number, double video_fps,

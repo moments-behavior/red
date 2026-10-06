@@ -25,7 +25,14 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
 
         // --- Paths ---
         if (ImGui::CollapsingHeader("Paths", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::Text("Default Project Root");
+            // Where dialogs start until you have used a folder: after that,
+            // the last one used comes first (default_project_root,
+            // media_browse_dir).
+            ImGui::Text("Start project dialogs in");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("Open Project and Save Project start here until "
+                                  "you have used another folder;\nthen they start "
+                                  "in the folder last used.");
             if (ImGui::InputText("##proj_root", &s.default_project_root_path))
                 other_changed = true;
             ImGui::SameLine();
@@ -40,7 +47,11 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
                     "SettingsBrowseProjRoot", "Choose Project Root", nullptr, cfg);
             }
 
-            ImGui::Text("Default Media Root");
+            ImGui::Text("Start media dialogs in");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("Open Videos, Open Images and New Project's Media "
+                                  "Folder start here until you\nhave used another "
+                                  "folder; then they start in the folder last used.");
             if (ImGui::InputText("##media_root", &s.default_media_root_path))
                 other_changed = true;
             ImGui::SameLine();

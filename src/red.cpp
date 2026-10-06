@@ -374,9 +374,8 @@ int main(int argc, char **argv) {
     win.export_win.jpeg_quality = user_settings.jarvis_jpeg_quality;
 
 
-    win.annotation.media_folder = user_settings.default_media_root_path.empty()
-                                     ? media_root_dir
-                                     : user_settings.default_media_root_path;
+    // The New Project form's Media Folder starts empty (or with the media
+    // already open); its Browse starts where media dialogs do.
 
     colors[ImPlotCol_Crosshairs] = ImVec4(0.3f, 0.10f, 0.64f, 1.00f);
 
@@ -415,9 +414,6 @@ int main(int argc, char **argv) {
     // variables for project management
     ProjectManager pm = ProjectManager();
     pm.project_root_path = default_project_root(user_settings, default_dir);
-    pm.media_folder = user_settings.default_media_root_path.empty()
-                          ? media_root_dir
-                          : user_settings.default_media_root_path;
 
     bool main_loop_running = false;
 

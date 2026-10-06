@@ -355,7 +355,7 @@ inline void HandleMainMenuDialogs(
         auto selected_files = ImGuiFileDialog::Instance()->GetSelection();
         const std::string folder = ImGuiFileDialog::Instance()->GetCurrentPath();
         run_or_confirm_unsaved(ctx, [&ctx, &win, images, selected_files, folder,
-                                     media_root_dir, print_metadata_fn,
+                                     print_metadata_fn,
                                      nuke_inference_fn]() mutable {
             close_project(ctx);
             win.reset();
@@ -363,7 +363,7 @@ inline void HandleMainMenuDialogs(
             ProjectManager &pm = ctx.pm;
             pm.media_folder = folder;
             remember_media_dir(ctx, pm.media_folder);
-            pm.project_name = dir_difference(pm.media_folder, media_root_dir);
+            pm.project_name = std::filesystem::path(pm.media_folder).filename().string();
             if (images) {
                 load_images(selected_files, ctx.ps, pm, ctx.imgs_names, ctx.scene,
                             ctx.dc_context, ctx.label_buffer_size,

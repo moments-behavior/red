@@ -43,7 +43,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         if (ImGui::MenuItem("Open Project...")) {
             IGFD::FileDialogConfig config;
             config.countSelectionMax = 1;
-            config.path = pm.project_root_path;
+            config.path = default_project_root(user_settings, ctx.default_dir);
             config.flags = ImGuiFileDialogFlags_Modal;
             ImGuiFileDialog::Instance()->OpenDialog(
                 "ChooseProject", "Choose Project File", ".redproj",
@@ -302,7 +302,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     if (ImGui::MenuItem(ICON_FK_FOLDER_OPEN "##toolbar_open")) {
         IGFD::FileDialogConfig config;
         config.countSelectionMax = 1;
-        config.path = pm.project_root_path;
+        config.path = default_project_root(user_settings, ctx.default_dir);
         config.flags = ImGuiFileDialogFlags_Modal;
         ImGuiFileDialog::Instance()->OpenDialog(
             "ChooseProject", "Choose Project File", ".redproj",
