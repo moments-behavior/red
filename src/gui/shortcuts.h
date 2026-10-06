@@ -49,7 +49,6 @@ enum class Sc {
     ActiveLast,
     DeleteAllKp,
     Triangulate,
-    PlotMenu,
     PeekRaw,
     SelectAllKeypoints, // keypoints table: select every keypoint column (toggle)
     CopyKeypoints,    // keypoints table: copy the selected node set
@@ -89,7 +88,6 @@ inline const Binding &binding(Sc s) {
         /* ActiveLast     */ {ImGuiKey_E, false, false, false, false},
         /* DeleteAllKp    */ {ImGuiKey_Backspace, false, false, false, false},
         /* Triangulate    */ {ImGuiKey_T, false, false, false, false},
-        /* PlotMenu       */ {ImGuiKey_I, false, false, false, false},
         /* PeekRaw        */ {ImGuiKey_P, false, false, false, true},
         /* SelectAllKeypoints */ {ImGuiKey_A, true, false, false, false},
         /* CopyKeypoints  */ {ImGuiKey_C, true, false, false, false},
