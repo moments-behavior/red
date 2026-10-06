@@ -25,6 +25,8 @@ struct BBoxToolState {
 
     int current_class = 0;      // index into the project's class list
     bool show_ids = true;
+    int editing_class = -1;     // class whose name is being edited in the panel
+    bool focus_edit = false;    // put the cursor in that name field next frame
 
     // Drawing state
     bool drawing = false;       // currently dragging out a new bbox
@@ -312,22 +314,46 @@ inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
         ImGui::SeparatorText("Classes");
         if (classes.empty())
             ImGui::TextDisabled("None yet -- the first box adds Class_0.");
-        // One row per class: pick it, and edit its name in place (YOLO
-        // export writes these names).
+        // One row per class: click to pick it, double-click to rename it in
+        // place (YOLO export writes these names).
         for (int i = 0; i < (int)classes.size(); ++i) {
             ImGui::PushID(i);
-            if (ImGui::RadioButton("##pick", i == state.current_class))
-                state.current_class = i;
-            ImGui::SameLine();
             ImGui::ColorButton("##clr", box_class_color(i),
                                ImGuiColorEditFlags_NoTooltip, ImVec2(14, 14));
             ImGui::SameLine();
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            ImGui::InputText("##name", &classes[(size_t)i]);
-            if (ImGui::IsItemActivated()) state.current_class = i;
+            if (state.editing_class == i) {
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (state.focus_edit) {
+                    ImGui::SetKeyboardFocusHere();
+                    state.focus_edit = false;
+                }
+                ImGui::InputText("##name", &classes[(size_t)i],
+                                 ImGuiInputTextFlags_AutoSelectAll);
+                if (ImGui::IsItemDeactivated()) {
+                    if (classes[(size_t)i].empty())   // keep a name to export
+                        classes[(size_t)i] = "Class_" + std::to_string(i);
+                    state.editing_class = -1;
+                }
+            } else {
+                if (ImGui::Selectable(classes[(size_t)i].c_str(),
+                                      i == state.current_class,
+                                      ImGuiSelectableFlags_AllowDoubleClick)) {
+                    state.current_class = i;
+                    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                        state.editing_class = i;
+                        state.focus_edit = true;
+                    }
+                }
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+                    ImGui::SetTooltip("Double-click to rename");
+            }
             ImGui::PopID();
         }
-        if (ImGui::Button("+ Add Class")) add_box_class(state, classes);
+        if (ImGui::Button("+ Add Class")) {
+            add_box_class(state, classes);
+            state.editing_class = state.current_class;   // name it straight away
+            state.focus_edit = true;
+        }
         },
         nullptr, ImVec2(300, 350));
 }

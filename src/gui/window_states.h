@@ -111,6 +111,7 @@ struct WindowStates {
         bbox.enabled = false;
         bbox.drawing = false;
         bbox.drawing_cam = -1;
+        bbox.editing_class = -1;
         bbox.current_class = 0;
         obb.show = false;
         obb.enabled = false;
