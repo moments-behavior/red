@@ -24,7 +24,8 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
         bool other_changed = false;
 
         // --- Paths ---
-        if (ImGui::CollapsingHeader("Paths", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SeparatorText("Paths");
+        {
             // Set: dialogs always start there. Empty: they start in the folder
             // last used (default_project_root, media_browse_dir).
             ImGui::Text("Start project dialogs in");
@@ -66,7 +67,8 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
         }
 
         // --- Display ---
-        if (ImGui::CollapsingHeader("Display Defaults")) {
+        ImGui::SeparatorText("Display Defaults");
+        {
             // Applied live to style.FontScaleMain by the main loop; ImGui 1.92+
             // re-rasterises glyphs at the scaled size, so text stays sharp.
             if (ImGui::SliderFloat("UI Text Size", &s.ui_text_scale,
@@ -89,7 +91,8 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
         }
 
         // --- Keypoint Colors ---
-        if (ImGui::CollapsingHeader("Keypoint Colors")) {
+        ImGui::SeparatorText("Keypoint Colors");
+        {
             // Colormap for all keypoints. "Rainbow (HSV)" is the legacy
             // default; the rest are ImPlot's built-in matplotlib/MATLAB maps
             // (Viridis, Plasma, Jet, Spectral, ...). Selecting one recolors
@@ -135,7 +138,8 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
         }
 
         // --- Playback ---
-        if (ImGui::CollapsingHeader("Playback Defaults")) {
+        ImGui::SeparatorText("Playback Defaults");
+        {
             // Same single control as the transport bar: one question ("how
             // fast?") rather than a mode checkbox plus a rate slider.
             struct DefSpeed { const char *label; float speed; bool clock_paced; };
@@ -182,7 +186,8 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
 
 #ifndef __APPLE__
         // --- Hardware (Linux only) ---
-        if (ImGui::CollapsingHeader("Hardware")) {
+        ImGui::SeparatorText("Hardware");
+        {
             ImGui::Text("Decode backend: %s", red::decode_backend_name());
             ImGui::TextDisabled("(%s)", red::decode_backend_reason());
             // Software decode writes host memory, so render_allocate_scene_memory
@@ -272,5 +277,5 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
             ImGuiFileDialog::Instance()->Close();
         }
         },
-        ImVec2(500, 500));
+        ImVec2(520, 720));   // every section shows, so room for them all
 }
