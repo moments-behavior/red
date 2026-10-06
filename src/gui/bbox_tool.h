@@ -132,8 +132,9 @@ inline void bbox_draw_overlays(const BBoxToolState &state,
 
         if (state.show_ids) {
             char label[96];
-            snprintf(label, sizeof(label), "%s #%d", box_class_name(classes, ci),
-                     fa.instance_id);
+            // Class, then which one of that class: "Class_0 #1".
+            snprintf(label, sizeof(label), "%s #%d",
+                     box_class_name(classes, ci), fa.instance_id);
             ImPlot::PlotText(label, x1 + 4, y2_plot - 4);
         }
     }

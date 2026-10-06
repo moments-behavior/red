@@ -35,6 +35,9 @@ inline void from_json(const nlohmann::json &j, AnnotationConfig &a) {
     a.enable_bboxes       = j.value("enable_bboxes", false);
     a.enable_obbs         = j.value("enable_obbs", false);
     a.class_names         = j.value("class_names", std::vector<std::string>{});
+    // {"animal"} was the default every project got, never a choice (classes
+    // could not be renamed): drop it, so it does not read as an animal.
+    if (a.class_names == std::vector<std::string>{"animal"}) a.class_names.clear();
 }
 
 struct ProjectManager {

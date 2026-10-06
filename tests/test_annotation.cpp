@@ -767,10 +767,15 @@ static void test_annotation_config_json_roundtrip() {
     EXPECT_FALSE(j.contains("class_names"));
     EXPECT_TRUE(cfg2.class_names.empty());
     // ... but an older project's are still read.
-    j["class_names"] = {"animal"};
+    j["class_names"] = {"rat", "mouse"};
     AnnotationConfig cfg3;
     from_json(j, cfg3);
-    EXPECT_EQ((int)cfg3.class_names.size(), 1);
+    EXPECT_EQ((int)cfg3.class_names.size(), 2);
+    // The old automatic default is not a class anyone chose.
+    j["class_names"] = {"animal"};
+    AnnotationConfig cfg4;
+    from_json(j, cfg4);
+    EXPECT_TRUE(cfg4.class_names.empty());
 }
 
 // Box class names round-trip through annotations.json with the boxes.
