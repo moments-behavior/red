@@ -575,27 +575,33 @@ inline void run_or_confirm_unsaved(AppContext &ctx, std::function<void()> action
 // .redproj and labeled_data/ (holding the labels so far), add it to Recent
 // Projects, remember the location for the next one, and adopt the layout on
 // screen as the project's. On failure the project stays Untitled.
+// Why <location>/<name>/ cannot take a new project, or "" when it can.
+// The Save Project dialog shows this as the user types.
+inline std::string untitled_save_problem(const std::string &name,
+                                         const std::string &location) {
+    namespace fs = std::filesystem;
+    if (name.empty())
+        return "Type a name for the project's folder.";
+    if (name.find_first_of("/\\:") != std::string::npos)
+        return "The name cannot contain / \\ or :";
+    if (location.empty())
+        return "Choose where to save it.";
+    const fs::path dir = fs::path(location) / name;
+    std::error_code ec;
+    if (fs::exists(dir, ec) && !(fs::is_directory(dir, ec) && fs::is_empty(dir, ec)))
+        return "\"" + name + "\" is already here. Choose another name or "
+               "go to another folder.";
+    return "";
+}
+
 inline bool save_untitled_project(AppContext &ctx, const std::string &name,
                                   const std::string &location, std::string *err) {
     namespace fs = std::filesystem;
-    if (name.empty() || name.find_first_of("/\\:") != std::string::npos) {
-        *err = "Give the project a name, without / \\ or :.";
-        return false;
-    }
-    if (location.empty()) {
-        *err = "Choose where to save it.";
+    if (std::string why = untitled_save_problem(name, location); !why.empty()) {
+        *err = why;
         return false;
     }
     const fs::path dir = fs::path(location) / name;
-    std::error_code ec;
-    if (fs::exists(dir / (name + ".redproj"), ec)) {
-        *err = "A project called " + name + " is already there.";
-        return false;
-    }
-    if (fs::exists(dir, ec) && !fs::is_empty(dir, ec)) {
-        *err = dir.string() + " already exists and is not empty.";
-        return false;
-    }
 
     const ProjectManager before = ctx.pm;
     auto fail = [&](const std::string &why) {

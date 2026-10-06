@@ -195,6 +195,28 @@ inline void HandleMainMenuDialogs(
         cfg.path = dir;
         cfg.fileName = name;
         cfg.flags = ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_HideColumnType;
+        // Beside the list: what Save will make, or -- in red, with OK greyed
+        // out -- why it can't, checked as the user types or moves.
+        cfg.sidePaneWidth = 230.0f;
+        cfg.sidePane = [](const char *, IGFD::UserDatas, bool *can_continue) {
+            auto *dlg = ImGuiFileDialog::Instance();
+            const std::string where = dlg->GetCurrentPath();
+            const std::string name =
+                dlg->GetCurrentFileName(IGFD_ResultMode_KeepInputFile);
+            const std::string why = untitled_save_problem(name, where);
+            ImGui::PushTextWrapPos(0.0f);
+            if (why.empty()) {
+                ImGui::TextDisabled("Save makes the folder");
+                ImGui::TextUnformatted(
+                    (std::filesystem::path(where) / name).string().c_str());
+                ImGui::TextDisabled("with the project and its labels in it.");
+            } else {
+                ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s",
+                                   why.c_str());
+                *can_continue = false;
+            }
+            ImGui::PopTextWrapPos();
+        };
         // No filter (""): no type list beside the name. Not nullptr, which
         // would make it a folder picker that names the clicked folder.
         ImGuiFileDialog::Instance()->OpenDialog(
@@ -225,9 +247,10 @@ inline void HandleMainMenuDialogs(
                 ctx.after_save_action = nullptr;
                 if (after) after();
             } else {
-                // Say why and ask again, where the user left off.
-                ctx.toasts.pushError(err);
-                open_save_dialog(dir, name);
+                // Rare (the side pane already checked the name): the disk
+                // refused. Say so mid-screen; nothing waits on it now.
+                ctx.popups.pushError("Could not save the project: " + err);
+                ctx.after_save_action = nullptr;
             }
         } else {
             ImGuiFileDialog::Instance()->Close();

@@ -20,6 +20,7 @@
 #include "gui/transport_bar.h"
 #include "project_handler.h"
 #include "project.h"
+#include "app_context.h"
 #include <cassert>
 #include <cctype>
 #include <cmath>
@@ -775,6 +776,26 @@ static void test_setup_untitled_project() {
     EXPECT_TRUE(pm.keypoints_root_folder.empty());
 }
 
+// Save Project's check: a new folder or an empty one is fine; a name that is
+// already there (folder with files, or a file) is not.
+static void test_untitled_save_problem() {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "red_test_save_problem";
+    fs::remove_all(root);
+    fs::create_directories(root / "empty");
+    fs::create_directories(root / "full");
+    { std::ofstream(root / "full" / "x.txt") << "x"; }
+    { std::ofstream(root / "afile") << "x"; }
+    const std::string r = root.string();
+    EXPECT_TRUE(untitled_save_problem("new", r).empty());
+    EXPECT_TRUE(untitled_save_problem("empty", r).empty());
+    EXPECT_FALSE(untitled_save_problem("full", r).empty());
+    EXPECT_FALSE(untitled_save_problem("afile", r).empty());
+    EXPECT_FALSE(untitled_save_problem("", r).empty());
+    EXPECT_FALSE(untitled_save_problem("a/b", r).empty());
+    fs::remove_all(root);
+}
+
 int main() {
     test_current_date_time();
 
@@ -787,6 +808,7 @@ int main() {
     test_toast_queue_basic();
     test_project_handler_registry();
     test_setup_untitled_project();
+    test_untitled_save_problem();
 
     // Transport bar + UI overhaul tests
     test_transport_bar_state_defaults();
