@@ -129,41 +129,55 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Recent Projects");
         ImGui::Spacing();
 
-        // Each row ends in an x that takes it off the list (the project's
-        // files are untouched). Removed after the loop, not mid-iteration.
+        // Each row is one button; while it is hovered an x shows at its
+        // right end, and a click there takes the row off the list (the
+        // project's files are untouched). Removed after the loop.
         int remove_row = -1;
-        const float x_w = ImGui::GetFrameHeight();
-        const float gap = ImGui::GetStyle().ItemSpacing.x;
         for (int ri = 0; ri < (int)ctx.user_settings.recent_projects.size(); ri++) {
             const auto &path = ctx.user_settings.recent_projects[ri];
             std::filesystem::path p(path);
             std::string display = p.parent_path().filename().string() + "/" + p.filename().string();
-            ImGui::PushID(ri);  // unique ID per row
             std::error_code ec;
-            if (!std::filesystem::exists(path, ec)) {
-                ImGui::AlignTextToFramePadding();
-                ImGui::TextDisabled("[missing] %s", display.c_str());
-                if (ImGui::IsItemHovered())
+            const bool missing = !std::filesystem::exists(path, ec);
+            if (missing) display = "[missing] " + display;
+
+            ImGui::PushID(ri);  // unique ID per row
+            ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0, 0.5f));
+            if (missing)
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            const bool clicked = ImGui::Button(display.c_str(), ImVec2(-1, 0));
+            if (missing) ImGui::PopStyleColor();
+            ImGui::PopStyleVar();
+
+            const bool row_hovered = ImGui::IsItemHovered();
+            const ImVec2 r0 = ImGui::GetItemRectMin(), r1 = ImGui::GetItemRectMax();
+            const float h = r1.y - r0.y;
+            const ImVec2 x0(r1.x - h, r0.y);   // the x's square, at the right end
+            const bool on_x = row_hovered && ImGui::IsMouseHoveringRect(x0, r1);
+            if (row_hovered) {
+                ImDrawList *dl = ImGui::GetWindowDrawList();
+                if (on_x)
+                    dl->AddRectFilled(x0, r1, ImGui::GetColorU32(ImGuiCol_ButtonActive),
+                                      ImGui::GetStyle().FrameRounding);
+                const ImVec2 ts = ImGui::CalcTextSize(ICON_FK_TIMES);
+                dl->AddText(ImVec2(x0.x + (h - ts.x) * 0.5f, x0.y + (h - ts.y) * 0.5f),
+                            ImGui::GetColorU32(on_x ? ImGuiCol_Text : ImGuiCol_TextDisabled),
+                            ICON_FK_TIMES);
+                if (on_x)
+                    ImGui::SetTooltip("Remove from this list (the project is not deleted)");
+                else
                     ImGui::SetTooltip("%s", path.c_str());
-                ImGui::SameLine(ImGui::GetContentRegionMax().x - x_w);
-            } else {
-                ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0, 0.5f));
-                if (ImGui::Button(display.c_str(), ImVec2(-(x_w + gap), 0))) {
+            }
+            if (clicked) {
+                if (on_x)
+                    remove_row = ri;
+                else if (!missing)
                     // The path is already known, so load it directly rather
                     // than re-asking for it through a file dialog. The main
                     // loop picks this up and runs the same loader the dialog
                     // uses.
                     win.load_project_request = path;
-                }
-                ImGui::PopStyleVar();
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s", path.c_str());
-                ImGui::SameLine(0, gap);
             }
-            if (ImGui::Button(ICON_FK_TIMES, ImVec2(x_w, 0)))
-                remove_row = ri;
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Remove from this list (the project is not deleted)");
             ImGui::PopID();
         }
         if (remove_row >= 0) {
