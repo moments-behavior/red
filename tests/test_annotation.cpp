@@ -733,10 +733,16 @@ static void test_bbox_classes_and_target() {
     EXPECT_EQ(active, 1);
     first.cameras[0].get_extras().has_bbox = true;
 
-    // It already has a box on camera 0: the next box starts the next
-    // instance (next unused id), which becomes the one being edited.
+    // It already has a box on camera 0: the next box goes on the next
+    // instance without one (wrapping to #0), which becomes the one edited.
     FrameAnnotation &second = box_target(amap, 5, 0, active, 3, 2, has_box);
-    EXPECT_EQ(second.instance_id, 8);
+    EXPECT_EQ(second.instance_id, 0);
+    EXPECT_EQ(active, 0);
+    EXPECT_EQ((int)amap[5].size(), 2);
+    second.cameras[0].get_extras().has_bbox = true;
+    // Every instance has one: a new instance, with the next unused id.
+    FrameAnnotation &third = box_target(amap, 5, 0, active, 3, 2, has_box);
+    EXPECT_EQ(third.instance_id, 8);
     EXPECT_EQ(active, 2);
     EXPECT_EQ((int)amap[5].size(), 3);
     // On another camera, instance 7 has no box yet: it goes there.

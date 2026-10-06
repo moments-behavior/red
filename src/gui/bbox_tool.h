@@ -129,6 +129,15 @@ inline ImVec4 new_box_color(const BBoxToolState &state, const LabelInfo &classes
     const FrameAnnotation &editing = fis[(size_t)idx];
     if (cam_idx < (int)editing.cameras.size() &&
         editing.cameras[(size_t)cam_idx].has_bbox()) {
+        // The next instance without a box here, else a new one (box_target).
+        const int n = (int)fis.size();
+        for (int step = 1; step < n; ++step) {
+            const int i = (idx + step) % n;
+            if (cam_idx < (int)fis[(size_t)i].cameras.size() &&
+                !fis[(size_t)i].cameras[(size_t)cam_idx].has_bbox())
+                return box_draw_color(classes, state.current_class,
+                                      fis[(size_t)i].instance_id, i);
+        }
         int next_id = 0;
         for (const auto &fa : fis) next_id = std::max(next_id, fa.instance_id + 1);
         return box_draw_color(classes, state.current_class, next_id, (int)fis.size());
@@ -165,8 +174,9 @@ inline int box_class_for_new(BBoxToolState &state, LabelInfo &classes) {
 
 // The instance a new box goes on, made the one being edited (active_instance,
 // an index into the frame's list): the one being edited, unless it already
-// has this kind of box on this camera -- then the next instance, with the
-// next unused id, so drawing box after box labels instance after instance.
+// has this kind of box on this camera -- then the next instance without one,
+// else a new instance with the next unused id -- so drawing box after box
+// labels instance after instance.
 // A frame with none gets a first instance. `has` says whether an instance
 // already has the box on that camera (an axis-aligned box or an OBB).
 template <typename HasBox>
@@ -187,6 +197,17 @@ inline FrameAnnotation &box_target(AnnotationMap &amap, u32 frame, int cam_idx,
     FrameAnnotation &editing = fis[(size_t)active_instance];
     if (cam_idx >= (int)editing.cameras.size() || !has(editing.cameras[(size_t)cam_idx]))
         return editing;
+    // It has one here: the next instance in the list without one (wrapping),
+    // so a frame's instances fill in order; a new one only when all have.
+    const int n = (int)fis.size();
+    for (int step = 1; step < n; ++step) {
+        const int i = (active_instance + step) % n;
+        if (cam_idx < (int)fis[(size_t)i].cameras.size() &&
+            !has(fis[(size_t)i].cameras[(size_t)cam_idx])) {
+            active_instance = i;
+            return fis[(size_t)i];
+        }
+    }
     int next_id = 0;
     for (const auto &fa : fis) next_id = std::max(next_id, fa.instance_id + 1);
     FrameAnnotation &fresh = get_or_create_frame(amap, frame, num_nodes,
