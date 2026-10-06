@@ -721,14 +721,32 @@ static void test_bbox_classes_and_target() {
     EXPECT_TRUE(classes.names[1] == "Class_1");
     EXPECT_EQ(state.current_class, 1);
 
+    auto has_box = [](const CameraAnnotation &c) { return c.has_bbox(); };
+
     // A box goes on the instance being edited, not the frame's first.
     AnnotationMap amap;
     get_or_create_frame(amap, 5, 3, 2, /*instance_id*/ 0);
     get_or_create_frame(amap, 5, 3, 2, /*instance_id*/ 7);
-    EXPECT_EQ(box_target(amap, 5, 1, 3, 2).instance_id, 7);
-    EXPECT_EQ(box_target(amap, 5, 0, 3, 2).instance_id, 0);
+    int active = 1;
+    FrameAnnotation &first = box_target(amap, 5, /*cam*/ 0, active, 3, 2, has_box);
+    EXPECT_EQ(first.instance_id, 7);
+    EXPECT_EQ(active, 1);
+    first.cameras[0].get_extras().has_bbox = true;
+
+    // It already has a box on camera 0: the next box starts the next
+    // instance (next unused id), which becomes the one being edited.
+    FrameAnnotation &second = box_target(amap, 5, 0, active, 3, 2, has_box);
+    EXPECT_EQ(second.instance_id, 8);
+    EXPECT_EQ(active, 2);
+    EXPECT_EQ((int)amap[5].size(), 3);
+    // On another camera, instance 7 has no box yet: it goes there.
+    active = 1;
+    EXPECT_EQ(box_target(amap, 5, /*cam*/ 1, active, 3, 2, has_box).instance_id, 7);
+
     // A frame with no instances gets a first one.
-    EXPECT_EQ(box_target(amap, 9, 1, 3, 2).instance_id, 0);
+    active = 1;
+    EXPECT_EQ(box_target(amap, 9, 0, active, 3, 2, has_box).instance_id, 0);
+    EXPECT_EQ(active, 0);
     EXPECT_EQ((int)amap[9].size(), 1);
 }
 

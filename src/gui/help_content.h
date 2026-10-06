@@ -112,7 +112,7 @@ inline const std::vector<Group> &shortcut_groups() {
                  "Over a cell: that camera. Over a name: all cameras. Otherwise: the whole selection, all cameras"},
         }},
         {"Bbox tool", "When the Bbox tool is enabled, over a camera view", Gate::ToolBbox, {
-            {S::COUNT, "Shift + drag", "Draw a box of the selected class on the instance being edited: press with Shift held, drag, let go (Esc cancels)"},
+            {S::COUNT, "Shift + drag", "Draw a box of the selected class: press with Shift held, drag, let go (Esc cancels). It goes on the instance being edited, or starts the next instance if that one already has a box on this camera"},
             {S::COUNT, "R", "Delete the hovered box on this camera (a hovered keypoint takes R first)"},
             {S::COUNT, "F", "Delete the hovered instance's box on all cameras (a hovered keypoint takes F first)"},
         }},

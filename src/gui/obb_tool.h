@@ -196,7 +196,7 @@ inline void obb_draw_overlays(OBBToolState &state, const BBoxToolState &bbox_sta
 inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
                               LabelInfo &classes,
                               AnnotationMap &amap, u32 frame, int cam_idx,
-                              int active_instance, int num_nodes, int num_cameras,
+                              int &active_instance, int num_nodes, int num_cameras,
                               int img_w, int img_h) {
     if (!state.enabled) return;
     if (!ImPlot::IsPlotHovered()) return;
@@ -234,8 +234,9 @@ inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
 
             // Store on the instance being edited
             const int cat = box_class_for_new(bbox_state, classes);
-            auto &fa = box_target(amap, frame, active_instance, num_nodes,
-                                  num_cameras);
+            auto &fa = box_target(amap, frame, cam_idx, active_instance,
+                                  num_nodes, num_cameras,
+                                  [](const CameraAnnotation &c) { return c.has_obb(); });
             fa.category_id = cat;
 
             if (cam_idx < (int)fa.cameras.size()) {

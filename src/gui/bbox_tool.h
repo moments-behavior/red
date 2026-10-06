@@ -68,18 +68,27 @@ inline ImVec4 box_draw_color(const LabelInfo &classes, int category,
                : instance_color(classes, instance_id, inst_index);
 }
 
-// The colour of a box about to be drawn: the selected class's, or with one
-// class the colour of the instance being edited.
+// The colour of a box about to be drawn on camera cam_idx: the selected
+// class's, or with one class the colour of the instance it will go on -- the
+// one being edited, or the next if that one already has a box here (as
+// box_target decides).
 inline ImVec4 new_box_color(const BBoxToolState &state, const LabelInfo &classes,
-                            const AnnotationMap &amap, u32 frame,
+                            const AnnotationMap &amap, u32 frame, int cam_idx,
                             int active_instance) {
     auto it = amap.find(frame);
     if (it == amap.end() || it->second.empty())
         return box_draw_color(classes, state.current_class, 0, 0);
-    const int idx = active_instance > 0 && active_instance < (int)it->second.size()
+    const FrameInstances &fis = it->second;
+    const int idx = active_instance > 0 && active_instance < (int)fis.size()
                         ? active_instance : 0;
-    return box_draw_color(classes, state.current_class,
-                          it->second[(size_t)idx].instance_id, idx);
+    const FrameAnnotation &editing = fis[(size_t)idx];
+    if (cam_idx < (int)editing.cameras.size() &&
+        editing.cameras[(size_t)cam_idx].has_bbox()) {
+        int next_id = 0;
+        for (const auto &fa : fis) next_id = std::max(next_id, fa.instance_id + 1);
+        return box_draw_color(classes, state.current_class, next_id, (int)fis.size());
+    }
+    return box_draw_color(classes, state.current_class, editing.instance_id, idx);
 }
 
 // A box's label: the instance's name ("#1" until named), and its class once
@@ -109,15 +118,32 @@ inline int box_class_for_new(BBoxToolState &state, LabelInfo &classes) {
     return state.current_class;
 }
 
-// The instance a new box goes on: the one being edited, or a first instance
-// on a frame that has none.
-inline FrameAnnotation &box_target(AnnotationMap &amap, u32 frame,
-                                   int active_instance, int num_nodes,
-                                   int num_cameras) {
+// The instance a new box goes on, made the one being edited (active_instance,
+// an index into the frame's list): the one being edited, unless it already
+// has this kind of box on this camera -- then the next instance, with the
+// next unused id, so drawing box after box labels instance after instance.
+// A frame with none gets a first instance. `has` says whether an instance
+// already has the box on that camera (an axis-aligned box or an OBB).
+template <typename HasBox>
+inline FrameAnnotation &box_target(AnnotationMap &amap, u32 frame, int cam_idx,
+                                   int &active_instance, int num_nodes,
+                                   int num_cameras, HasBox has) {
     auto it = amap.find(frame);
-    if (it != amap.end() && !it->second.empty())
-        return instance_or_first(it->second, active_instance);
-    return get_or_create_frame(amap, frame, num_nodes, num_cameras);
+    if (it == amap.end() || it->second.empty()) {
+        active_instance = 0;
+        return get_or_create_frame(amap, frame, num_nodes, num_cameras);
+    }
+    FrameInstances &fis = it->second;
+    if (active_instance < 0 || active_instance >= (int)fis.size()) active_instance = 0;
+    FrameAnnotation &editing = fis[(size_t)active_instance];
+    if (cam_idx >= (int)editing.cameras.size() || !has(editing.cameras[(size_t)cam_idx]))
+        return editing;
+    int next_id = 0;
+    for (const auto &fa : fis) next_id = std::max(next_id, fa.instance_id + 1);
+    FrameAnnotation &fresh = get_or_create_frame(amap, frame, num_nodes,
+                                                 num_cameras, next_id);
+    active_instance = (int)fis.size() - 1;
+    return fresh;
 }
 
 // Keys for the box tools: plain presses only, so Cmd/Ctrl shortcuts that
@@ -142,7 +168,7 @@ inline void bbox_draw_overlays(const BBoxToolState &state,
         double dys[] = {state.start_y, state.start_y, mouse.y, mouse.y, state.start_y};
         ImPlotSpec nspec;
         nspec.LineColor =
-            new_box_color(state, classes, amap, frame, active_instance);
+            new_box_color(state, classes, amap, frame, cam_idx, active_instance);
         ImPlot::PlotLine("##bbox_new", dxs, dys, 5, nspec);
     }
 
@@ -208,7 +234,7 @@ inline void bbox_draw_cursor(const BBoxToolState &state,
     const ImVec2 lo = ImPlot::GetPlotPos();
     const ImVec2 hi(lo.x + ImPlot::GetPlotSize().x, lo.y + ImPlot::GetPlotSize().y);
     const ImU32 col = ImGui::GetColorU32(
-        new_box_color(state, classes, amap, frame, active_instance));
+        new_box_color(state, classes, amap, frame, cam_idx, active_instance));
     const ImU32 cross = IM_COL32(255, 255, 255, 150);
     dl->PushClipRect(lo, hi, true);
     dl->AddLine(ImVec2(lo.x, m.y), ImVec2(m.x - 5, m.y), cross);
@@ -226,7 +252,7 @@ inline void bbox_draw_cursor(const BBoxToolState &state,
 inline void bbox_handle_input(BBoxToolState &state,
                               LabelInfo &classes,
                               AnnotationMap &amap, u32 frame, int cam_idx,
-                              int active_instance, int num_nodes,
+                              int &active_instance, int num_nodes,
                               int num_cameras, int img_w, int img_h) {
     if (!state.enabled) return;
     // A drag belongs to the view it started in; the others leave it alone.
@@ -270,8 +296,9 @@ inline void bbox_handle_input(BBoxToolState &state,
         if (x2 - x1 < 3 || y2_plot - y1_plot < 3) return;
 
         const int cat = box_class_for_new(state, classes);
-        auto &fa = box_target(amap, frame, active_instance, num_nodes,
-                              num_cameras);
+        auto &fa = box_target(amap, frame, cam_idx, active_instance, num_nodes,
+                              num_cameras,
+                              [](const CameraAnnotation &c) { return c.has_bbox(); });
         fa.category_id = cat;
         if (cam_idx < (int)fa.cameras.size()) {
             auto &ext = fa.cameras[cam_idx].get_extras();
@@ -340,8 +367,9 @@ inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
 
         ImGui::Separator();
         ImGui::TextWrapped("Shift+drag: draw a box of the selected class on "
-                           "the instance being edited (N: next instance). "
-                           "Esc cancels.");
+                           "the instance being edited; if it already has a "
+                           "box on this camera, the box starts the next "
+                           "instance. Esc cancels.");
         ImGui::TextWrapped("R: delete the hovered box (this camera)");
         ImGui::TextWrapped("F: delete the hovered instance's box (all cameras)");
 
