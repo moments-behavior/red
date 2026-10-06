@@ -107,16 +107,16 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
     ImGui::Spacing();
 
     ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0, 0.5f));
-    if (ImGui::Button("Create Annotation Project", ImVec2(-1, 0))) {
+    if (ImGui::Button("New Project", ImVec2(-1, 0))) {
         win.annotation.open();
     }
-    if (ImGui::Button("Load Annotation Project", ImVec2(-1, 0))) {
+    if (ImGui::Button("Open Project", ImVec2(-1, 0))) {
         IGFD::FileDialogConfig cfg;
         cfg.countSelectionMax = 1;
         cfg.path = default_project_root(ctx.user_settings, ctx.default_dir);
         cfg.flags = ImGuiFileDialogFlags_Modal;
         ImGuiFileDialog::Instance()->OpenDialog(
-            "ChooseProject", "Load Annotation Project",
+            "ChooseProject", "Open Project",
             "Red Project{.redproj}", cfg);
     }
     ImGui::PopStyleVar();

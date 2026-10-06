@@ -414,7 +414,7 @@ inline void close_project(AppContext &ctx, bool save_labels = true) {
     ctx.pm.project_path.clear();
     ctx.pm.project_name.clear();
     // Back to the configured defaults, not empty. These two are seeded at
-    // startup and are where the Create Annotation Project form starts from, so
+    // startup and are where the New Project form starts from, so
     // clearing them meant the first project of a session had them filled in
     // and every one after it did not -- a required field that silently emptied
     // itself once you had opened anything.
@@ -606,7 +606,7 @@ inline void on_project_loaded(AppContext &ctx,
 }
 
 // ---------------------------------------------------------------------------
-// Untitled projects. Create Annotation Project opens one with no name, folder
+// Untitled projects. New Project opens one with no name, folder
 // or .redproj; the first save (Cmd+S, File > Save, the toolbar) opens
 // Save Project, which names it and makes its folder. Its labels live only in
 // memory until then, and there is no auto-save, so nothing that replaces the

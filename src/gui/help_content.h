@@ -160,9 +160,9 @@ inline const std::vector<Tool> &tools() {
     static const std::vector<Tool> v = [] {
         std::vector<Tool> t = {
             // Projects
-            {"Create Annotation Project", "File > New Project / Welcome",
+            {"New Project", "File > New Project / Welcome",
                 "Define a new project over per-camera videos: skeleton, camera model, calibration.", Gate::Always, "A loaded video/folder"},
-            {"Load Project", "File > Open Project / Welcome",
+            {"Open Project", "File > Open Project / Welcome",
                 "Open an annotation .redproj.", Gate::Always, "\xE2\x80\x94"},
             {"Switch Skeleton", "Project > Switch Skeleton\xE2\x80\xA6",
                 "Change an open project's skeleton.", Gate::Always, "No manual labels yet (re-indexes keypoints)"},

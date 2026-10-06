@@ -128,7 +128,7 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
     }
 
     ImGui::SetNextWindowSize(ImVec2(720, 460), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Create Annotation Project", &state.show,
+    if (ImGui::Begin("New Project", &state.show,
                      ImGuiWindowFlags_NoCollapse)) {
 
         // error banner

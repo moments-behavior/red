@@ -134,7 +134,7 @@ inline void DrawSwitchSkeletonWindow(SwitchSkeletonState &st, AppContext &ctx) {
             st.skeleton_wait = -1;
         }
 
-        // One row, as in Create Annotation Project: the preset list (or the
+        // One row, as in the New Project form: the preset list (or the
         // path and Browse), New..., then File / Preset.
         const ImGuiStyle &style = ImGui::GetStyle();
         const float gap = style.ItemInnerSpacing.x;
