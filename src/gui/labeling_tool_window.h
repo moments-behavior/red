@@ -212,6 +212,9 @@ inline void DrawLabelingToolWindow(
         const bool has_prev = kp_pn.prev >= 0;
         const int prev_frame = kp_pn.prev;
 
+        // Its own header, so it reads apart from the Instances row above.
+        ImGui::SeparatorText("Keypoints");
+
         // === Top row: Save, Triangulate, Prev/Next label ===
         // Saves red's CSVs into the project's label folder. A tailcycle
         // session has none -- it is saved back into its own tables from the
