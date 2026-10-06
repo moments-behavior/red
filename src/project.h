@@ -380,7 +380,8 @@ inline bool write_skeleton_json(const SkeletonContext &s,
 inline bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
                    const std::map<std::string, SkeletonPrimitive> &skeleton_map,
                    std::string *err) {
-    if (!ensure_dir_exists(pm.project_path, err))
+    // An Untitled project has no folder until its first save.
+    if (!pm.untitled && !ensure_dir_exists(pm.project_path, err))
         return false;
 
     pm.camera_params.clear();

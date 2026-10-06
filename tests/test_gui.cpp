@@ -19,6 +19,7 @@
 #include "gui/toast.h"
 #include "gui/transport_bar.h"
 #include "project_handler.h"
+#include "project.h"
 #include <cassert>
 #include <cctype>
 #include <cmath>
@@ -758,6 +759,22 @@ static void test_reprojection_drops_offscreen_occluded_position() {
 // main
 // ---------------------------------------------------------------------------
 
+// A new project is Untitled: setting it up must not touch the disk (it has no
+// folder yet -- creating "" failed with "No such file or directory").
+static void test_setup_untitled_project() {
+    auto skeleton_map = skeleton_get_all();
+    ProjectManager pm;
+    pm.untitled = true;
+    pm.skeleton_name = skeleton_map.begin()->first;
+    pm.camera_names = {"Cam1"};
+    SkeletonContext skeleton;
+    std::string err;
+    EXPECT_TRUE(setup_project(pm, skeleton, skeleton_map, &err));
+    if (!err.empty()) fprintf(stderr, "  setup_project: %s\n", err.c_str());
+    EXPECT_TRUE(pm.project_path.empty());
+    EXPECT_TRUE(pm.keypoints_root_folder.empty());
+}
+
 int main() {
     test_current_date_time();
 
@@ -769,6 +786,7 @@ int main() {
     test_popup_stack_fifo();
     test_toast_queue_basic();
     test_project_handler_registry();
+    test_setup_untitled_project();
 
     // Transport bar + UI overhaul tests
     test_transport_bar_state_defaults();
