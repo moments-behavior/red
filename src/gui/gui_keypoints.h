@@ -744,7 +744,8 @@ inline bool solve_midline_constraint(FrameAnnotation &fa,
 
 // Reprojection error in pixels for one camera's keypoints: the distance
 // between where a keypoint was placed and where its instance's 3D point
-// projects in that camera. NaN with no 3D point or no position.
+// projects in that camera. NaN with no 3D point, no position, or nothing to
+// measure from (a projection, or a point T moved in an earlier session).
 constexpr double kReprojGoodPx = 2.0, kReprojBadPx = 5.0;
 inline std::vector<double> reprojection_errors_px(const FrameAnnotation &fa, int view_idx,
                                                   int num_nodes, const CameraParams &cam,
@@ -757,6 +758,15 @@ inline std::vector<double> reprojection_errors_px(const FrameAnnotation &fa, int
         const auto &kp = kps[(size_t)n];
         const auto &p3 = fa.kp3d[(size_t)n];
         if (!kp.usable() || !p3.exist) continue;
+        // Measured by T as it solved (placed -> new projection), before it
+        // moved the point there; else, for a hand-placed point T has not
+        // moved, measured now. A point T filled in is its own projection:
+        // no error to show.
+        if (std::isfinite(kp.reproj_err_px)) {
+            out[(size_t)n] = kp.reproj_err_px;
+            continue;
+        }
+        if (!kp.is_manual() || kp.reprojected) continue;
         const Eigen::Vector3d X(p3.x, p3.y, p3.z);
         const Eigen::Vector2d proj =
             cam.telecentric
@@ -865,6 +875,10 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                 // refreshed user annotation remains visible; derived values
                 // are marked projected and are excluded from the next solve.
                 auto &kp2d = fa.cameras[view_idx].keypoints[node];
+                // Where a hand-placed point is now, before it moves onto the
+                // projection: its reprojection error is measured from here.
+                const bool was_placed = kp2d.is_manual() && kp2d.usable();
+                const double placed_x = kp2d.x, placed_y = kp2d.y;
                 // An occluded node gets its coordinates refreshed too -- the
                 // overlay draws the cross straight from x/y, so this is what
                 // keeps it on the part as the solve moves. Only the position
@@ -937,6 +951,10 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                 }
 
                 if (in_frame) {
+                    // Placed -> projected, measured before the point moves.
+                    kp2d.reproj_err_px =
+                        was_placed ? (float)std::hypot(x - placed_x, y - placed_y)
+                                   : std::numeric_limits<float>::quiet_NaN();
                     kp2d.x = x;
                     kp2d.y = y;
                     kp2d.vis = Keypoint2D::Vis::Unknown;

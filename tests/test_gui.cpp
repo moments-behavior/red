@@ -994,6 +994,21 @@ static void test_reprojection_error_colors() {
     EXPECT_TRUE(is(c[1], 1.0f, 0.85f));   // yellow
     EXPECT_TRUE(is(c[2], 1.0f, 0.25f));   // red
     EXPECT_TRUE(is(c[3], 0.6f, 0.6f));    // grey
+
+    // After T: a point it moved shows what it measured as it solved, even
+    // though the point now sits on the projection; one it filled in shows
+    // none; placing the point again clears the measurement.
+    auto &moved = fa.cameras[0].keypoints[0];
+    moved.reprojected = true;
+    moved.reproj_err_px = 7.0f;
+    auto &filled = fa.cameras[0].keypoints[1];
+    filled.author = Keypoint2D::Author::Derived;
+    filled.reprojected = true;
+    const auto e = reprojection_errors_px(fa, 0, 4, cam, img_h);
+    EXPECT_NEAR(e[0], 7.0, 1e-6);
+    EXPECT_FALSE(std::isfinite(e[1]));
+    moved.set_manual();
+    EXPECT_FALSE(std::isfinite(moved.reproj_err_px));
 }
 
 static void test_bbox_ui_drag_corner() {

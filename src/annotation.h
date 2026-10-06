@@ -9,6 +9,7 @@
 #include "types.h"
 #include "json.hpp"
 #include <algorithm>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
@@ -63,6 +64,11 @@ struct Keypoint2D {
     bool is_manual() const { return author == Author::Manual; }
     bool is_predicted() const { return author == Author::Predicted; }
     bool reprojected = false;   // the stored numbers came from the 3D
+    // Reprojection error measured when T last solved this point: pixels from
+    // where it was placed to where the new 3D projects, taken before T moved
+    // it there. NaN when not measured, or when the point was moved since.
+    // Not saved.
+    float  reproj_err_px = std::numeric_limits<float>::quiet_NaN();
 
     // Independent of the above: an assessment that the point is not visible
     // here. It has no usable coordinates, so `exist` is false while this is
@@ -118,6 +124,8 @@ struct Keypoint2D {
     void set_manual() {
         has_pos = true; author = Author::Manual; vis = Vis::Observed;
         reprojected = false;
+        // Placed (again): the last T's measurement no longer describes it.
+        reproj_err_px = std::numeric_limits<float>::quiet_NaN();
     }
     void set_predicted(float conf = 0.0f) {
         has_pos = true; author = Author::Predicted; confidence = conf;
