@@ -139,20 +139,17 @@ inline void DrawSwitchSkeletonWindow(SwitchSkeletonState &st, AppContext &ctx) {
         if (ImGui::Combo("Mode##switch_skel_mode", &mode, "File\0Preset\0")) {
             st.load_from_json = (mode == 0);
         }
-        ImGui::SameLine();
-        if (ImGui::Button("New...##switch_skel_new"))
-            st.skeleton_wait = open_skeleton_creator_for(ctx);
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-            ImGui::SetTooltip("Draw a new skeleton in the Skeleton Creator; "
-                              "saving it there picks it here.");
+
 
         if (st.load_from_json) {
             float avail = ImGui::GetContentRegionAvail().x;
             const char *btxt = "Browse##browse_skel_switch";
-            float browse_w = ImGui::CalcTextSize(btxt).x +
+            float browse_w = ImGui::CalcTextSize("Browse").x +
                              ImGui::GetStyle().FramePadding.x * 2.0f;
+            float new_w = ImGui::CalcTextSize("New...").x +
+                          ImGui::GetStyle().FramePadding.x * 2.0f;
             float gap = ImGui::GetStyle().ItemInnerSpacing.x;
-            ImGui::SetNextItemWidth(ImMax(50.0f, avail - browse_w - gap));
+            ImGui::SetNextItemWidth(ImMax(50.0f, avail - browse_w - new_w - 2 * gap));
             ImGui::InputText("##switch_skel_path", &st.skeleton_file);
             ImGui::SameLine(0.0f, gap);
             if (ImGui::Button(btxt)) {
@@ -163,6 +160,13 @@ inline void DrawSwitchSkeletonWindow(SwitchSkeletonState &st, AppContext &ctx) {
                 ImGuiFileDialog::Instance()->OpenDialog(
                     "ChooseSkeletonSwitch", "Choose Skeleton", ".json", cfg);
             }
+            // Draw a new one; saving it there picks it here.
+            ImGui::SameLine(0.0f, gap);
+            if (ImGui::Button("New...##switch_skel_new"))
+                st.skeleton_wait = open_skeleton_creator_for(ctx);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("Draw a new skeleton in the Skeleton Creator; "
+                                  "saving it there picks it here.");
         } else {
             ImGui::BeginDisabled(labels_s.empty());
             ImGui::SetNextItemWidth(220);
