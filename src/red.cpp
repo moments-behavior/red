@@ -881,6 +881,14 @@ int main(int argc, char **argv) {
 
 
         // Handle main menu file dialogs
+        // Text size (View > Text Size): works anywhere, Welcome screen too.
+        if (keys::pressed(keys::Sc::TextLarger))
+            set_ui_text_scale(ctx, user_settings.ui_text_scale + kUiTextScaleStep);
+        if (keys::pressed(keys::Sc::TextSmaller))
+            set_ui_text_scale(ctx, user_settings.ui_text_scale - kUiTextScaleStep);
+        if (keys::pressed(keys::Sc::TextReset))
+            set_ui_text_scale(ctx, 1.0f);
+
         // A skeleton picker's "New..." asked for the Skeleton Creator.
         if (ctx.open_skeleton_creator) {
             ctx.open_skeleton_creator = false;

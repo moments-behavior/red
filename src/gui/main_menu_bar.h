@@ -178,6 +178,22 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         if (ImGui::MenuItem("Triangulation Diagnostics"))
             triangulation_diag_state.show = true;
         ImGui::EndDisabled();
+        ImGui::Separator();
+        if (ImGui::BeginMenu("Text Size")) {
+            const float cur = user_settings.ui_text_scale;
+            if (ImGui::MenuItem("Larger", keys::display(keys::Sc::TextLarger).c_str(),
+                                false, cur < kUiTextScaleMax))
+                set_ui_text_scale(ctx, cur + kUiTextScaleStep);
+            if (ImGui::MenuItem("Smaller", keys::display(keys::Sc::TextSmaller).c_str(),
+                                false, cur > kUiTextScaleMin))
+                set_ui_text_scale(ctx, cur - kUiTextScaleStep);
+            char reset[48];
+            snprintf(reset, sizeof(reset), "Reset (now %d%%)", (int)std::lround(cur * 100));
+            if (ImGui::MenuItem(reset, keys::display(keys::Sc::TextReset).c_str(),
+                                false, cur != 1.0f))
+                set_ui_text_scale(ctx, 1.0f);
+            ImGui::EndMenu();
+        }
         ImGui::EndMenu();
     }
 

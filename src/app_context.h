@@ -133,6 +133,18 @@ inline void remember_skeleton_dir(AppContext &ctx, const std::string &file) {
     save_user_settings(ctx.user_settings);
 }
 
+// UI text size: View > Text Size, its shortcuts, and the Settings slider.
+// Kept within the slider's range, applied at once and saved.
+constexpr float kUiTextScaleMin = 0.7f, kUiTextScaleMax = 2.0f, kUiTextScaleStep = 0.1f;
+inline void set_ui_text_scale(AppContext &ctx, float scale) {
+    scale = std::clamp(std::round(scale * 20.0f) / 20.0f, kUiTextScaleMin,
+                       kUiTextScaleMax);
+    if (scale == ctx.user_settings.ui_text_scale) return;
+    ctx.user_settings.ui_text_scale = scale;
+    ImGui::GetStyle().FontScaleMain = scale;
+    save_user_settings(ctx.user_settings);
+}
+
 // Where Open Videos / Open Images / the Media Folder picker start: the media
 // open now, else the folder media was last opened from, else Settings' media
 // folder, else home -- never red's working directory (/ from Finder).

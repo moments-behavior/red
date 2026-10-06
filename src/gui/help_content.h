@@ -76,6 +76,9 @@ inline const std::vector<Group> &shortcut_groups() {
             {S::JumpBack, nullptr, "Jump back (paused)", Gate::Always, "One keyframe interval for video, ten frames for images"},
             {S::JumpFwd, nullptr, "Jump forward (paused)", Gate::Always, "One keyframe interval for video, ten frames for images"},
             {S::SaveLabels, nullptr, "Save labels (writes a new timestamped labeled_data folder)"},
+            {S::TextLarger, nullptr, "Larger text (View > Text Size)"},
+            {S::TextSmaller, nullptr, "Smaller text"},
+            {S::TextReset, nullptr, "Text back to 100%"},
         }},
         {"Labeling \xE2\x80\x94 hovering an image", "With a skeleton loaded; hover a camera view", Gate::Always, {
             {S::CreateFrame, nullptr, "Create the keypoint set for this frame"},

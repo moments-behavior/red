@@ -61,7 +61,7 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
             // Applied live to style.FontScaleMain by the main loop; ImGui 1.92+
             // re-rasterises glyphs at the scaled size, so text stays sharp.
             if (ImGui::SliderFloat("UI Text Size", &s.ui_text_scale,
-                                   0.7f, 2.0f, "%.2fx")) {
+                                   kUiTextScaleMin, kUiTextScaleMax, "%.2fx")) {
                 ImGui::GetStyle().FontScaleMain = s.ui_text_scale;
                 other_changed = true;
             }

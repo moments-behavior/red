@@ -54,6 +54,9 @@ enum class Sc {
     CopyKeypoints,    // keypoints table: copy the selected node set
     PasteKeypoints,   // keypoints table: paste the copied node set onto this frame
     DeleteKeypoint,   // keypoints table: delete (hovered cell / hovered column / selection)
+    TextLarger,       // UI text size (View > Text Size)
+    TextSmaller,
+    TextReset,
     COUNT  // sentinel: "no single bound key" (help rows that use a literal label)
 };
 
@@ -93,6 +96,9 @@ inline const Binding &binding(Sc s) {
         /* CopyKeypoints  */ {ImGuiKey_C, true, false, false, false},
         /* PasteKeypoints */ {ImGuiKey_V, true, false, false, false},
         /* DeleteKeypoint */ {ImGuiKey_Delete, false, false, false, false},
+        /* TextLarger     */ {ImGuiKey_Equal, true, false, true, false},
+        /* TextSmaller    */ {ImGuiKey_Minus, true, false, true, false},
+        /* TextReset      */ {ImGuiKey_0, true, false, false, false},
     };
     static_assert(sizeof(table) / sizeof(table[0]) == (size_t)Sc::COUNT,
                   "keys::binding table is out of sync with enum Sc");
@@ -143,6 +149,8 @@ inline std::string key_name(ImGuiKey k) {
         case ImGuiKey_UpArrow:    return ICON_FK_ARROW_UP;
         case ImGuiKey_DownArrow:  return ICON_FK_ARROW_DOWN;
         case ImGuiKey_Comma:      return ",";
+        case ImGuiKey_Equal:      return "=";
+        case ImGuiKey_Minus:      return "-";
         case ImGuiKey_Period:     return ".";
         case ImGuiKey_Space:      return "Space";
         case ImGuiKey_Backspace:  return "Backspace";
