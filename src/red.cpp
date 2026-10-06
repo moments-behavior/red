@@ -404,8 +404,12 @@ int main(int argc, char **argv) {
     std::unordered_map<std::string, bool> window_was_decoding;
     std::unordered_map<std::string, bool> window_is_visible;  // actual ImGui visibility (prev frame)
     PlaybackState ps;
-    ps.set_playback_speed = user_settings.default_playback_speed;
-    ps.realtime_playback = user_settings.default_realtime_playback;
+    // Every session starts at 1x real time; the transport bar sets the speed
+    // (an older Settings default for it is no longer applied).
+    user_settings.default_playback_speed = 1.0f;
+    user_settings.default_realtime_playback = true;
+    ps.set_playback_speed = 1.0f;
+    ps.realtime_playback = true;
     DisplayState display;
     // Brightness / contrast start neutral (DisplayState's defaults) and are
     // set in the transport bar; how contrast pivots is a saved preference.
