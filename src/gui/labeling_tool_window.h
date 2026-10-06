@@ -865,8 +865,11 @@ inline void DrawLabelingToolWindow(
             const double x_pad = 6.0 / ImMax(px_per_frame_full, 1e-9);
             const double x_lo = -x_pad, x_hi = (double)(total_frames - 1) + x_pad;
 
+            // Always: the default, Once, applies only when the plot first
+            // appears, so a later reset (double-click, a new recording) did
+            // nothing.
             if (state.timeline_reset_pending) {
-                ImPlot::SetNextAxesLimits(x_lo, x_hi, 0, 1);
+                ImPlot::SetNextAxesLimits(x_lo, x_hi, 0, 1, ImPlotCond_Always);
                 state.timeline_reset_pending = false;
             }
 
