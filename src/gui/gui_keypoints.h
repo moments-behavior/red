@@ -100,7 +100,10 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                                // skeleton's (by instance, by reprojection
                                // error); the active keypoint keeps
                                // active_color.
-                               const std::vector<ImVec4> *node_override = nullptr) {
+                               const std::vector<ImVec4> *node_override = nullptr,
+                               // Per-node reprojection error in this camera
+                               // (px, NaN = none), shown when hovering.
+                               const std::vector<double> *node_errors = nullptr) {
     if (view_idx >= (int)fa.cameras.size()) return false;
     auto &cam = fa.cameras[view_idx];
     bool touched = false;
@@ -353,6 +356,12 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                         << fa.kp3d[node].z << ")";
                     if (!label.empty()) label += ": ";
                     label += oss.str();
+                    if (node_errors && node < node_errors->size() &&
+                        std::isfinite((*node_errors)[node])) {
+                        std::ostringstream e;
+                        e << std::fixed << std::setprecision(1) << (*node_errors)[node];
+                        label += "  reprojection " + e.str() + " px";
+                    }
                 }
                 if (!label.empty()) {
                     ImVec2 mouse_pos = ImGui::GetMousePos();
@@ -733,18 +742,14 @@ inline bool solve_midline_constraint(FrameAnnotation &fa,
     return true;
 }
 
-// Reprojection-error colours for one camera's keypoints: the distance in
-// pixels between where a keypoint was placed and where its instance's 3D
-// point projects in that camera. Green up to kReprojGoodPx, yellow up to
-// kReprojBadPx, red above; grey with no 3D point (or no position).
+// Reprojection error in pixels for one camera's keypoints: the distance
+// between where a keypoint was placed and where its instance's 3D point
+// projects in that camera. NaN with no 3D point or no position.
 constexpr double kReprojGoodPx = 2.0, kReprojBadPx = 5.0;
-inline std::vector<ImVec4> reprojection_error_colors(const FrameAnnotation &fa,
-                                                     int view_idx, int num_nodes,
-                                                     const CameraParams &cam,
-                                                     double img_h) {
-    const ImVec4 grey(0.6f, 0.6f, 0.6f, 1.0f), green(0.25f, 0.9f, 0.3f, 1.0f),
-        yellow(1.0f, 0.85f, 0.2f, 1.0f), red(1.0f, 0.25f, 0.2f, 1.0f);
-    std::vector<ImVec4> out((size_t)std::max(num_nodes, 0), grey);
+inline std::vector<double> reprojection_errors_px(const FrameAnnotation &fa, int view_idx,
+                                                  int num_nodes, const CameraParams &cam,
+                                                  double img_h) {
+    std::vector<double> out((size_t)std::max(num_nodes, 0), std::nan(""));
     if (view_idx >= (int)fa.cameras.size()) return out;
     const auto &kps = fa.cameras[(size_t)view_idx].keypoints;
     for (int n = 0; n < num_nodes; ++n) {
@@ -758,12 +763,28 @@ inline std::vector<ImVec4> reprojection_error_colors(const FrameAnnotation &fa,
                 ? red_math::projectPointTelecentric(X, cam.projection_mat, cam.k,
                                                     cam.dist_coeffs, cam.dist_center)
                 : red_math::projectPointR(X, cam.r, cam.tvec, cam.k, cam.dist_coeffs);
-        const double err = (proj - Eigen::Vector2d(kp.x, img_h - kp.y)).norm();
-        out[(size_t)n] = !std::isfinite(err) ? grey
-                         : err <= kReprojGoodPx ? green
-                         : err <= kReprojBadPx  ? yellow
-                                                : red;
+        out[(size_t)n] = (proj - Eigen::Vector2d(kp.x, img_h - kp.y)).norm();
     }
+    return out;
+}
+
+// Green up to kReprojGoodPx, yellow up to kReprojBadPx, red above; grey for
+// no error to show (NaN).
+inline ImVec4 reprojection_error_color(double err) {
+    if (!std::isfinite(err)) return ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
+    if (err <= kReprojGoodPx) return ImVec4(0.25f, 0.9f, 0.3f, 1.0f);
+    if (err <= kReprojBadPx) return ImVec4(1.0f, 0.85f, 0.2f, 1.0f);
+    return ImVec4(1.0f, 0.25f, 0.2f, 1.0f);
+}
+
+// Reprojection-error colours for one camera's keypoints (the two above).
+inline std::vector<ImVec4> reprojection_error_colors(const FrameAnnotation &fa,
+                                                     int view_idx, int num_nodes,
+                                                     const CameraParams &cam,
+                                                     double img_h) {
+    std::vector<ImVec4> out;
+    for (double e : reprojection_errors_px(fa, view_idx, num_nodes, cam, img_h))
+        out.push_back(reprojection_error_color(e));
     return out;
 }
 

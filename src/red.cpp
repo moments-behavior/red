@@ -1588,12 +1588,18 @@ int main(int argc, char **argv) {
                                             instance_color(pm.annotation_config.label_info,
                                                            fis_draw[inst].instance_id,
                                                            (int)inst));
-                                    else if (display.keypoint_coloring == KC::ByReprojError &&
-                                             j < pm.camera_params.size())
-                                        node_cols = reprojection_error_colors(
+                                    // The error in this camera, for colouring
+                                    // and for hovering a triangulated point.
+                                    std::vector<double> node_errs;
+                                    if (j < pm.camera_params.size())
+                                        node_errs = reprojection_errors_px(
                                             fis_draw[inst], (int)j, skeleton.num_nodes,
                                             pm.camera_params[j],
                                             (double)scene->image_height[j]);
+                                    if (display.keypoint_coloring == KC::ByReprojError &&
+                                        !node_errs.empty())
+                                        for (double e : node_errs)
+                                            node_cols.push_back(reprojection_error_color(e));
                                     if (gui_plot_keypoints(
                                             fis_draw[inst], &skeleton, j,
                                             scene->num_cams,
@@ -1601,7 +1607,8 @@ int main(int argc, char **argv) {
                                             (int)inst,
                                             (int)inst == active_instance,
                                             display.show_keypoint_names,
-                                            node_cols.empty() ? nullptr : &node_cols))
+                                            node_cols.empty() ? nullptr : &node_cols,
+                                            node_errs.empty() ? nullptr : &node_errs))
                                         grabbed = (int)inst;
                                 };
                                 for (size_t inst = 0; inst < fis_draw.size(); inst++)

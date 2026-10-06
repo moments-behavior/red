@@ -1,6 +1,7 @@
 #pragma once
 #include "app_context.h"
 #include "keypoint_colors.h"
+#include "gui/gui_keypoints.h"   // instance_color, reprojection_errors_px
 #include "gui/keypoint_clipboard.h"
 #include "gui/shortcuts.h"
 #include <imgui.h>
@@ -43,6 +44,70 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                 for (int c = 0; c < rows_count && c < (int)is_view_focused.size(); ++c)
                     if (is_view_focused[c]) { only_cam = c; break; }
             }
+
+            // Cells take the views' colouring (right-click a view > Keypoint
+            // Colours): each keypoint's own colour, the instance's, or the
+            // reprojection error -- per camera in its row, and in the 3D row
+            // the worst camera's, so red there means some view disagrees.
+            using KC = DisplayState::KeypointColoring;
+            std::vector<std::vector<ImVec4>> row_cols((size_t)rows_count);
+            std::vector<ImVec4> cols3d;
+            // Reprojection errors (px, NaN = none) per camera row, for the
+            // colours and the hovers; computed whenever there is a calibration.
+            std::vector<std::vector<double>> row_errs((size_t)rows_count);
+            if (keypoints_find && !ctx.pm.camera_params.empty()) {
+                const auto &fa = instance_or_first(annotations.at(current_frame_num),
+                                                   ctx.active_instance);
+                for (int r = 0; r < rows_count && r < (int)ctx.pm.camera_params.size(); ++r)
+                    row_errs[(size_t)r] = reprojection_errors_px(
+                        fa, r, skeleton.num_nodes, ctx.pm.camera_params[(size_t)r],
+                        (double)scene->image_height[r]);
+            }
+            auto worst_err = [&](int node) {   // over every camera, NaN for none
+                double w = std::nan("");
+                for (const auto &re : row_errs)
+                    if (node < (int)re.size() && std::isfinite(re[(size_t)node]) &&
+                        !(re[(size_t)node] <= w))
+                        w = re[(size_t)node];
+                return w;
+            };
+            if (keypoints_find && ctx.display.keypoint_coloring != KC::ByNode) {
+                const auto &fa = instance_or_first(annotations.at(current_frame_num),
+                                                   ctx.active_instance);
+                const int nn = skeleton.num_nodes;
+                if (ctx.display.keypoint_coloring == KC::ByInstance) {
+                    const ImVec4 c = instance_color(ctx.pm.annotation_config.label_info,
+                                                    fa.instance_id, ctx.active_instance);
+                    for (auto &rc : row_cols) rc.assign((size_t)nn, c);
+                    cols3d.assign((size_t)nn, c);
+                } else if (!ctx.pm.camera_params.empty()) {
+                    for (int r = 0; r < rows_count; ++r)
+                        for (double e : row_errs[(size_t)r])
+                            row_cols[(size_t)r].push_back(reprojection_error_color(e));
+                    for (int k = 0; k < nn; ++k)
+                        cols3d.push_back(reprojection_error_color(worst_err(k)));
+                }
+            }
+            // " · reprojection 3.4 px" for a cell, or "" with none.
+            auto err_text = [&](int row, int node) -> std::string {
+                if (row < 0 || row >= (int)row_errs.size() ||
+                    node >= (int)row_errs[(size_t)row].size() ||
+                    !std::isfinite(row_errs[(size_t)row][(size_t)node]))
+                    return "";
+                char b[48];
+                snprintf(b, sizeof(b), "\nreprojection %.1f px",
+                         row_errs[(size_t)row][(size_t)node]);
+                return b;
+            };
+            // A cell's colour: row < 0 is the 3D row.
+            auto node_col = [&](int row, int node) -> ImVec4 {
+                const std::vector<ImVec4> *v =
+                    row < 0 ? &cols3d
+                            : (row < (int)row_cols.size() ? &row_cols[(size_t)row] : nullptr);
+                if (v && node < (int)v->size()) return (*v)[(size_t)node];
+                return node < (int)skeleton.node_colors.size()
+                           ? skeleton.node_colors[(size_t)node] : ImVec4(1, 1, 1, 1);
+            };
 
             // Keep the multi-selection sized to the current skeleton.
             kc.ensure_size(skeleton.num_nodes);
@@ -331,8 +396,7 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                 // keypoint is drawn as an outline below, so
                                 // whether it has been placed stays visible.
                                 if (labeled) {
-                                    node_color =
-                                        skeleton.node_colors[node];
+                                    node_color = node_col(row, node);
                                     node_color.w = projected ? 0.5f : 0.9f;
                                 } else if (occluded) {
                                     node_color = ImVec4(0.85f, 0.25f, 0.25f, 0.9f);
@@ -390,9 +454,10 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                     hover_node = node;
                                     if (node < (int)skeleton.node_names.size() &&
                                         row < (int)pm.camera_names.size()) {
+                                        const std::string et = err_text(row, node);
                                         if (kc.count() >= 2)
                                             ImGui::SetTooltip(
-                                                "%s / %s\n%s%s%s\n"
+                                                "%s / %s\n%s%s%s%s\n"
                                                 "Click: set active + show view   "
                                                 "Delete: remove selected set (%d)",
                                                 pm.camera_names[row].c_str(),
@@ -400,17 +465,19 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                                 state_text,
                                                 vis_text ? "\n" : "",
                                                 vis_text ? vis_text : "",
+                                                et.c_str(),
                                                 kc.count());
                                         else
                                             ImGui::SetTooltip(
-                                                "%s / %s\n%s%s%s\n"
+                                                "%s / %s\n%s%s%s%s\n"
                                                 "Click: set active + show view   "
                                                 "Delete: remove from this camera",
                                                 pm.camera_names[row].c_str(),
                                                 skeleton.node_names[node].c_str(),
                                                 state_text,
                                                 vis_text ? "\n" : "",
-                                                vis_text ? vis_text : "");
+                                                vis_text ? vis_text : "",
+                                                et.c_str());
                                     }
                                 }
                                 // T marks coordinates that came from the 3D,
@@ -520,14 +587,34 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                         ImGui::InvisibleButton(
                             "##kp3dcell",
                             ImVec2(cell_w, ImGui::GetFrameHeight()));
-                        if (k3.exist && ImGui::IsItemHovered())
+                        if (k3.exist && ImGui::IsItemHovered()) {
+                            // Its reprojection error in each camera, and the
+                            // worst (what the cell's colour shows, by error).
+                            std::string errs;
+                            for (int r = 0; r < (int)row_errs.size(); ++r) {
+                                if (node >= (int)row_errs[(size_t)r].size() ||
+                                    !std::isfinite(row_errs[(size_t)r][(size_t)node]))
+                                    continue;
+                                char b[96];
+                                snprintf(b, sizeof(b), "%s%s %.1f px", errs.empty() ? "" : "  ",
+                                         r < (int)pm.camera_names.size()
+                                             ? pm.camera_names[(size_t)r].c_str() : "cam",
+                                         row_errs[(size_t)r][(size_t)node]);
+                                errs += b;
+                            }
+                            if (!errs.empty()) {
+                                char b[48];
+                                snprintf(b, sizeof(b), "\n(worst %.1f px)", worst_err(node));
+                                errs = "\nreprojection: " + errs + b;
+                            }
                             ImGui::SetTooltip(
-                                "%s\n%s\n(%.2f, %.2f, %.2f)",
+                                "%s\n%s\n(%.2f, %.2f, %.2f)%s",
                                 node < (int)skeleton.node_names.size()
                                     ? skeleton.node_names[node].c_str() : "",
                                 k3.is_predicted()
                                     ? "predicted" : "triangulated",
-                                k3.x, k3.y, k3.z);
+                                k3.x, k3.y, k3.z, errs.c_str());
+                        }
                         ImGui::PopID();
 
                         // Coloured the way the 2D cells above are: the node's
@@ -538,7 +625,7 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                         // whole column -- the hue says which keypoint, the
                         // strength says how much of it is yours.
                         if (k3.exist && node < (int)skeleton.node_colors.size()) {
-                            ImVec4 c = skeleton.node_colors[node];
+                            ImVec4 c = node_col(-1, node);
                             c.w = k3.is_predicted() ? 0.5f : 0.9f;
                             ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg,
                                                    ImGui::GetColorU32(c));
