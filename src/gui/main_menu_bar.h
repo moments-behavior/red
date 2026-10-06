@@ -12,7 +12,6 @@
 inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     auto &annot_state      = win.annotation;
     auto &settings_state   = win.settings;
-    auto &jarvis_export_state = win.jarvis_export;
     auto &export_state     = win.export_win;
     auto &bbox_state       = win.bbox;
     auto &obb_state        = win.obb;
@@ -90,15 +89,26 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             ctx.save_requested = true;
         ImGui::EndDisabled();
         ImGui::Separator();
+        // The formats themselves, each opening the export window with it
+        // chosen (tailcycle is in the Tailcycle menu).
         if (ImGui::BeginMenu("Export")) {
-            if (ImGui::MenuItem("Export Tool..."))
-                export_state.show = true;
+            auto format_item = [&](const char *label, ExportFormats::Format f) {
+                if (ImGui::MenuItem(label)) {
+                    export_state.show = true;
+                    export_state.want_format = (int)f;
+                }
+            };
+            format_item("JARVIS...", ExportFormats::JARVIS);
+            format_item("COCO Keypoints...", ExportFormats::COCO);
+            format_item("DeepLabCut...", ExportFormats::DEEPLABCUT);
+            format_item("YOLO Pose...", ExportFormats::YOLO_POSE);
+            format_item("YOLO Detection...", ExportFormats::YOLO_DETECT);
             ImGui::BeginDisabled(is_2d);
-            if (ImGui::MenuItem("JARVIS..."))
-                jarvis_export_state.show = true;
+            format_item("Nerfstudio / 3DGS...", ExportFormats::NERFSTUDIO);
             ImGui::EndDisabled();
+            ImGui::Separator();
             // A standalone multi-dataset merge: works with no project open.
-            if (ImGui::MenuItem("Group JARVIS..."))
+            if (ImGui::MenuItem("Group JARVIS (several projects)..."))
                 win.group_export.show = true;
             ImGui::EndMenu();
         }
@@ -224,7 +234,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort |
                                      ImGuiHoveredFlags_AllowWhenDisabled))
                 ImGui::SetTooltip("Write this project out as a tailcycle-dataset. "
-                                  "Opens the Export Tool with that format chosen.");
+                                  "Opens Export with that format chosen.");
             ImGui::Separator();
         }
         // Needs calibration: it tracks the 3D keypoints.

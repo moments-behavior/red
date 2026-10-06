@@ -571,7 +571,7 @@ int main(int argc, char **argv) {
     panels.add({"Settings",
                 [&]() { DrawSettingsWindow(win.settings, ctx); },
                 nullptr});
-    panels.add({"Export Tool",
+    panels.add({"Export",
                 [&]() { DrawExportWindow(win.export_win, ctx, annotations); },
                 nullptr});
     panels.add({"Group JARVIS Export",

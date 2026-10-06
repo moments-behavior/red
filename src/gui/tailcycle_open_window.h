@@ -549,7 +549,7 @@ inline void DrawTailcycleDatasetWindow(TailcycleOpenState &state,
                     state.confirm_save = true;
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Overwrite %s/%s's label tables with your "
-                                      "edits. Use Export Tool instead to write "
+                                      "edits. Use Tailcycle > Export Dataset instead to write "
                                       "a new dataset and leave this one "
                                       "untouched.",
                                       state.open_split.c_str(),

@@ -176,9 +176,9 @@ inline const std::vector<Tool> &tools() {
             {"Midline Tool", "Label > Midline Tool",
                 "Reconstruct a midline (e.g. a proboscis) from one side camera + one line camera.", Gate::Need3D, "Calibrated project"},
             // Export
-            {"Export Tool", "File > Export > Export Tool",
+            {"Export", "File > Export > (a format)",
                 "Export labels: JARVIS, COCO, DeepLabCut, YOLO Pose/Detection, Nerfstudio.", Gate::Always, "Labeled frames"},
-            {"Group JARVIS Export", "File > Export > Group JARVIS",
+            {"Group JARVIS Export", "File > Export > Group JARVIS (several projects)",
                 "Merge many projects/datasets into one JARVIS dataset (shared keypoints).", Gate::Always, "\xE2\x80\x94"},
             {"Import JARVIS Predictions", "File > Import JARVIS Predictions",
                 "Read a JARVIS data3D.csv into a read-only prediction store, or straight into editable labels.", Gate::Need3D, "Calibrated project"},
@@ -216,7 +216,7 @@ inline const std::vector<Workflow> &workflows() {
             RED_MOD_KEY "+S saves labels to a new timestamped labeled_data folder.",
         }},
         {"Export training data", {
-            "File > Export > Export Tool.",
+            "File > Export > (the format).",
             "Pick a format (JARVIS, COCO, DeepLabCut, YOLO, Nerfstudio).",
             "Set the output directory and split options; Export (labels auto-save first).",
         }},

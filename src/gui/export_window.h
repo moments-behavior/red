@@ -91,7 +91,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         state.finished.store(false, std::memory_order_relaxed);
     }
 
-    DrawPanel("Export Tool", state.show,
+    DrawPanel("Export", state.show,
         [&]() {
 
         // Format selector. Nerfstudio/3DGS needs camera calibration, so it is
