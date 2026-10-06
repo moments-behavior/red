@@ -114,10 +114,24 @@ inline void DrawLabelingToolWindow(
                 // One row per instance: click to edit it, double-click the
                 // name to rename it, double-click the colour to pick one.
                 // Names and colours are kept by id (saved with the labels).
+                // Side by side, wrapping only when the panel is too narrow.
                 ImGui::SeparatorText("Instances");
                 auto &info = pm.annotation_config.label_info;
+                const ImGuiStyle &st = ImGui::GetStyle();
+                const float right_edge =
+                    ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
                 for (int i = 0; i < n; i++) {
                     const int id = fit->second[(size_t)i].instance_id;
+                    const std::string shown = info.instance_name(id);
+                    const float name_w = state.editing_instance == id
+                        ? 120.0f
+                        : ImGui::CalcTextSize(shown.c_str()).x;
+                    const float item_w = 14.0f + st.ItemInnerSpacing.x + name_w;
+                    if (i > 0) {
+                        ImGui::SameLine(0, st.ItemSpacing.x * 2);
+                        if (ImGui::GetCursorScreenPos().x + item_w > right_edge)
+                            ImGui::NewLine();
+                    }
                     ImGui::PushID(id);
                     ImVec4 col = instance_color(info, id, i);
                     ImGui::ColorButton("##clr", col, ImGuiColorEditFlags_NoTooltip,
@@ -138,10 +152,10 @@ inline void DrawLabelingToolWindow(
                         }
                         ImGui::EndPopup();
                     }
-                    ImGui::SameLine();
+                    ImGui::SameLine(0, st.ItemInnerSpacing.x);
                     if (state.editing_instance == id) {
                         std::string &name = info.instances[id].name;
-                        ImGui::SetNextItemWidth(160);
+                        ImGui::SetNextItemWidth(name_w);
                         if (state.focus_instance_edit) {
                             ImGui::SetKeyboardFocusHere();
                             state.focus_instance_edit = false;
@@ -150,10 +164,9 @@ inline void DrawLabelingToolWindow(
                                                  &name, ImGuiInputTextFlags_AutoSelectAll);
                         if (ImGui::IsItemDeactivated()) state.editing_instance = -1;
                     } else {
-                        const std::string shown = info.instance_name(id);
                         if (ImGui::Selectable(shown.c_str(), ctx.active_instance == i,
                                               ImGuiSelectableFlags_AllowDoubleClick,
-                                              ImVec2(160, 0))) {
+                                              ImVec2(name_w, 0))) {
                             ctx.active_instance = i;
                             if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                                 state.editing_instance = id;
@@ -168,6 +181,7 @@ inline void DrawLabelingToolWindow(
             }
 
             if (fit != annotations.end() && skeleton.has_skeleton) {
+                if (n > 1) ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 2);
                 if (ImGui::SmallButton(ICON_FK_PLUS " Instance")) {
                     // A new instance gets the next unused id, so ids stay
                     // stable even after one is removed.
