@@ -134,19 +134,20 @@ inline void from_json(const nlohmann::json &j, UserSettings &s) {
     s.recent_projects = j.value("recent_projects", std::vector<std::string>{});
 }
 
-// Where project dialogs start (Open Project, Save Project): the folder last
-// used for a project, else the Settings default, else `fallback` (home). The
-// same rule as media dialogs (media_browse_dir). Read when a dialog opens, so
-// a Settings change applies at once.
+// Where project dialogs start (Open Project, Save Project): the Settings
+// folder when one is set -- a fixed place, chosen -- else the folder last used
+// for a project, else `fallback` (home). The same rule as media dialogs
+// (media_browse_dir). Read when a dialog opens, so a Settings change applies
+// at once.
 inline std::string default_project_root(const UserSettings &s,
                                         const std::string &fallback) {
     std::error_code ec;
-    if (!s.last_project_root.empty() &&
-        std::filesystem::is_directory(s.last_project_root, ec))
-        return s.last_project_root;
     if (!s.default_project_root_path.empty() &&
         std::filesystem::is_directory(s.default_project_root_path, ec))
         return s.default_project_root_path;
+    if (!s.last_project_root.empty() &&
+        std::filesystem::is_directory(s.last_project_root, ec))
+        return s.last_project_root;
     return fallback;
 }
 

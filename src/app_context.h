@@ -153,12 +153,14 @@ inline std::string media_browse_dir(const AppContext &ctx) {
     auto usable = [&](const std::string &d) {
         return !d.empty() && std::filesystem::is_directory(d, ec);
     };
+    // The Settings folder when one is set (a fixed place, chosen); else the
+    // media open now, else the folder media was last opened from; else home.
+    if (usable(ctx.user_settings.default_media_root_path))
+        return ctx.user_settings.default_media_root_path;
     if ((ctx.ps.video_loaded || ctx.input_is_imgs) && usable(ctx.pm.media_folder))
         return ctx.pm.media_folder;
     if (usable(ctx.user_settings.last_media_dir))
         return ctx.user_settings.last_media_dir;
-    if (usable(ctx.user_settings.default_media_root_path))
-        return ctx.user_settings.default_media_root_path;
     return get_home_directory();
 }
 

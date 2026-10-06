@@ -25,15 +25,13 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
 
         // --- Paths ---
         if (ImGui::CollapsingHeader("Paths", ImGuiTreeNodeFlags_DefaultOpen)) {
-            // Where dialogs start until you have used a folder: after that,
-            // the last one used comes first (default_project_root,
-            // media_browse_dir).
+            // Set: dialogs always start there. Empty: they start in the folder
+            // last used (default_project_root, media_browse_dir).
             ImGui::Text("Start project dialogs in");
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-                ImGui::SetTooltip("Open Project and Save Project start here until "
-                                  "you have used another folder;\nthen they start "
-                                  "in the folder last used.");
-            if (ImGui::InputText("##proj_root", &s.default_project_root_path))
+                ImGui::SetTooltip("Open Project and Save Project always start here.\n"
+                                  "Leave empty to start in the folder last used.");
+            if (ImGui::InputTextWithHint("##proj_root", "the folder last used", &s.default_project_root_path))
                 other_changed = true;
             ImGui::SameLine();
             if (ImGui::Button("Browse##proj_root")) {
@@ -50,9 +48,9 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
             ImGui::Text("Start media dialogs in");
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                 ImGui::SetTooltip("Open Videos, Open Images and New Project's Media "
-                                  "Folder start here until you\nhave used another "
-                                  "folder; then they start in the folder last used.");
-            if (ImGui::InputText("##media_root", &s.default_media_root_path))
+                                  "Folder always start here.\nLeave empty to start "
+                                  "in the folder last used.");
+            if (ImGui::InputTextWithHint("##media_root", "the folder last used", &s.default_media_root_path))
                 other_changed = true;
             ImGui::SameLine();
             if (ImGui::Button("Browse##media_root")) {
