@@ -14,6 +14,62 @@ Full documentation — installation, configuration, data export — lives at the
 
 [Video demo](https://www.youtube.com/watch?v=9eOJaadE1Nc)
 
+## Download and run
+
+Ready-made builds are on the [Releases page](https://github.com/moments-behavior/red/releases):
+no compiler or dependencies needed. They decode video on the CPU, so they run
+on any machine, with or without a GPU; build from source (below) for GPU
+decoding.
+
+### macOS (Apple Silicon)
+
+1. Download `red-<version>-macos<N>-arm64.zip` and double-click it: you get
+   **Red.app**. Drag it to Applications.
+2. The first time, macOS blocks it, since it is not from the App Store. Open
+   **System Settings > Privacy & Security**, scroll to the message about Red
+   and click **Open Anyway**, then open Red again. (Right-click > Open no
+   longer does this on macOS 15 and later.)
+
+Needs an Apple Silicon Mac (M1 or later) on the macOS version in the file
+name (`macos15`: macOS 15 or later).
+
+### Windows (64-bit)
+
+Either:
+
+- **Installer**: run `red-<version>-windows-x64-setup.exe`. It installs for
+  you alone, without needing an administrator (or for everyone, if you
+  choose), adds Red to the Start menu, and can be removed from
+  **Settings > Apps**.
+- **Portable zip**: unzip `red-<version>-windows-x64.zip` anywhere and run
+  `red\bin\red.exe`. Nothing is installed; delete the folder to remove it.
+
+If SmartScreen says "Windows protected your PC", click **More info >
+Run anyway**: the build is not code-signed.
+
+### Linux (x86-64, Ubuntu 22.04 or later)
+
+Either:
+
+- **AppImage**: one file, nothing to install.
+  ```bash
+  chmod +x red-<version>-linux-x86_64.AppImage
+  ./red-<version>-linux-x86_64.AppImage
+  ```
+- **Tarball**: unpack and run.
+  ```bash
+  tar xzf red-<version>-linux-x64.tar.gz
+  ./red/bin/red
+  ```
+
+Any distribution with glibc 2.35 or newer should work (Ubuntu 22.04's).
+
+### Your settings and projects
+
+Red keeps its settings (text size, recent projects, where dialogs start, ...)
+in `~/.config/red/` (`%USERPROFILE%\.config\red\` on Windows). Projects are
+wherever you save them. Removing or updating Red leaves both alone.
+
 ## Dependencies
 
 | | macOS | Linux | Windows |
