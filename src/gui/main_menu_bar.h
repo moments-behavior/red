@@ -92,11 +92,20 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         // The formats themselves, each opening the export window with it
         // chosen (tailcycle is in the Tailcycle menu).
         if (ImGui::BeginMenu("Export")) {
+            // Every format exports labels: with none, say so here rather
+            // than in the window after Export is pressed.
+            const bool have_labels = !ctx.annotations.empty();
             auto format_item = [&](const char *label, ExportFormats::Format f) {
+                ImGui::BeginDisabled(!have_labels);
                 if (ImGui::MenuItem(label)) {
                     export_state.show = true;
                     export_state.want_format = (int)f;
                 }
+                ImGui::EndDisabled();
+                if (!have_labels &&
+                    ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Nothing to export yet: open a project and "
+                                      "label some frames.");
             };
             format_item("JARVIS...", ExportFormats::JARVIS);
             format_item("COCO Keypoints...", ExportFormats::COCO);
@@ -106,7 +115,8 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             ImGui::BeginDisabled(is_2d);
             format_item("Nerfstudio / 3DGS...", ExportFormats::NERFSTUDIO);
             ImGui::EndDisabled();
-            if (is_2d && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            if (is_2d && !ctx.annotations.empty() &&
+                ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                 ImGui::SetTooltip("Needs a calibrated project: Nerfstudio / 3DGS "
                                   "takes the cameras'\npositions and lenses from "
                                   "its calibration.");
