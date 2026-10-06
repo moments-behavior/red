@@ -743,15 +743,25 @@ static void test_bbox_classes_and_target() {
     active = 1;
     EXPECT_EQ(box_target(amap, 5, /*cam*/ 1, active, 3, 2, has_box).instance_id, 7);
 
-    // A new frame starts with its neighbours' instances (frame 5's 0, 7 and
-    // 8, unlabelled), and the box goes on the one at the edited place.
+    // A new frame starts with the previously labelled frame's instances
+    // (frame 5's 0, 7 and 8, unlabelled), and the box goes on the one at the
+    // edited place.
     active = 1;
     EXPECT_EQ(box_target(amap, 9, 0, active, 3, 2, has_box).instance_id, 7);
     EXPECT_EQ(active, 1);
     EXPECT_EQ((int)amap[9].size(), 3);
     EXPECT_FALSE(amap[9][0].cameras[0].has_bbox());   // not carried over
-    // With nothing around it, just instance 0.
+    // The nearest labelled frame either way; a frame of only empty
+    // instances does not count.
+    AnnotationMap near;
+    get_or_create_frame(near, 3, 3, 2, 5);            // empty instance 5: skipped
+    get_or_create_frame(near, 0, 3, 2, 4).cameras[0].get_extras().absent = true;
+    get_or_create_frame(near, 6, 3, 2, 6).cameras[0].get_extras().absent = true;
+    active = 0;
+    EXPECT_EQ(box_target(near, 4, 0, active, 3, 2, has_box).instance_id, 6);  // 6 is 2 away, 0 is 4
+    // With no labelled frame anywhere, just instance 0.
     AnnotationMap lone;
+    get_or_create_frame(lone, 2, 3, 2, 5);            // empty instance 5
     active = 2;
     EXPECT_EQ(box_target(lone, 4, 0, active, 3, 2, has_box).instance_id, 0);
     EXPECT_EQ(active, 0);

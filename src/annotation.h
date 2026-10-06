@@ -468,33 +468,6 @@ inline FrameAnnotation &get_or_create_frame(AnnotationMap &amap, u32 frame,
     return fis.back();
 }
 
-// Start a frame with the same instances as its neighbours: the animals (ids
-// and classes, in order) of the nearest earlier frame that has any, else the
-// nearest later one, else just instance 0 -- all unlabelled. Labelling five
-// animals then moving on keeps five, at the same places in the list. A frame
-// that already has instances is returned as it is.
-inline FrameInstances &create_frame_instances(AnnotationMap &amap, u32 frame,
-                                              int num_nodes, int num_cameras) {
-    auto here = amap.find(frame);
-    if (here != amap.end() && !here->second.empty()) return here->second;
-    std::vector<std::pair<int, int>> ids;   // (instance_id, category_id)
-    auto take = [&](const FrameInstances &fis) {
-        for (const auto &fa : fis) ids.push_back({fa.instance_id, fa.category_id});
-    };
-    for (auto it = amap.lower_bound(frame); it != amap.begin();) {
-        --it;
-        if (!it->second.empty()) { take(it->second); break; }
-    }
-    if (ids.empty())
-        for (auto it = amap.upper_bound(frame); it != amap.end(); ++it)
-            if (!it->second.empty()) { take(it->second); break; }
-    if (ids.empty()) ids.push_back({0, 0});
-    FrameInstances &fis = amap[frame];
-    for (const auto &[id, cat] : ids)
-        fis.push_back(make_frame(num_nodes, num_cameras, frame, id, cat));
-    return fis;
-}
-
 // The animal being edited, clamped into range. A frame may hold fewer
 // instances than the UI's index -- switching frames must not put the editor
 // out of bounds, and silently editing the wrong animal would be worse than
@@ -526,6 +499,37 @@ inline bool any_instance_has_manual_labels(const FrameInstances &fis) {
     for (const auto &fa : fis) if (frame_has_any_manual_labels(fa)) return true;
     return false;
 }
+
+// Start a frame with the instances of the nearest labelled frame, earlier or
+// later (the closer; earlier on a tie): its animals (ids and classes, in
+// order), all unlabelled here -- else just instance 0. A frame with only
+// empty instances does not count. Labelling five animals then moving on keeps
+// five, at the same places in the list. A frame that already has instances
+// is returned as it is.
+inline FrameInstances &create_frame_instances(AnnotationMap &amap, u32 frame,
+                                              int num_nodes, int num_cameras) {
+    auto here = amap.find(frame);
+    if (here != amap.end() && !here->second.empty()) return here->second;
+    const FrameInstances *before = nullptr, *after = nullptr;
+    u32 f_before = 0, f_after = 0;
+    for (auto it = amap.lower_bound(frame); it != amap.begin();) {
+        --it;
+        if (any_instance_has_labels(it->second)) { before = &it->second; f_before = it->first; break; }
+    }
+    for (auto it = amap.upper_bound(frame); it != amap.end(); ++it)
+        if (any_instance_has_labels(it->second)) { after = &it->second; f_after = it->first; break; }
+    const FrameInstances *from =
+        before && (!after || frame - f_before <= f_after - frame) ? before : after;
+    std::vector<std::pair<int, int>> ids;   // (instance_id, category_id)
+    if (from)
+        for (const auto &fa : *from) ids.push_back({fa.instance_id, fa.category_id});
+    if (ids.empty()) ids.push_back({0, 0});
+    FrameInstances &fis = amap[frame];
+    for (const auto &[id, cat] : ids)
+        fis.push_back(make_frame(num_nodes, num_cameras, frame, id, cat));
+    return fis;
+}
+
 
 // Check if the frame has any annotation data (keypoints or bboxes)
 inline bool frame_has_any_labels(const FrameAnnotation &fa) {
