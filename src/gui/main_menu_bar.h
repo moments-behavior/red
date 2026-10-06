@@ -90,7 +90,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         ImGui::EndDisabled();
         ImGui::Separator();
         // The formats themselves, each opening the export window with it
-        // chosen (tailcycle is in the Tailcycle menu).
+        // chosen.
         if (ImGui::BeginMenu("Export")) {
             // Every format exports labels: with none, say so here rather
             // than in the window after Export is pressed.
@@ -112,6 +112,10 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             format_item("DeepLabCut...", ExportFormats::DEEPLABCUT);
             format_item("YOLO Pose...", ExportFormats::YOLO_POSE);
             format_item("YOLO Detection...", ExportFormats::YOLO_DETECT);
+            // Also in the Tailcycle menu; here too so every format is in
+            // one list. Needs Arrow, like the export itself.
+            if (TailcycleExport::available())
+                format_item("tailcycle-dataset...", ExportFormats::TAILCYCLE);
             ImGui::BeginDisabled(is_2d);
             format_item("Nerfstudio / 3DGS...", ExportFormats::NERFSTUDIO);
             ImGui::EndDisabled();
