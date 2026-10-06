@@ -155,6 +155,8 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
         for (size_t i = 0; i < links.size(); ++i)
             w += ImGui::CalcTextSize(links[i]).x + (i ? ImGui::CalcTextSize(sep).x : 0);
         ImGui::SetCursorPosX((avail_w - w) * 0.5f + ImGui::GetStyle().WindowPadding.x);
+        // The title's light blue: the default link blue is dim on this panel.
+        ImGui::PushStyleColor(ImGuiCol_TextLink, ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
         for (size_t i = 0; i < links.size(); ++i) {
             if (i) {
                 ImGui::SameLine(0, 0);
@@ -189,6 +191,7 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
                                       "skeleton.");
             }
         }
+        ImGui::PopStyleColor();
     }
 
     ImGui::EndDisabled(); // matches BeginDisabled(just_appeared)
