@@ -19,7 +19,6 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
 
     DrawPanel("Settings", state.show,
         [&]() {
-        bool display_changed = false;
         bool playback_changed = false;
         bool other_changed = false;
 
@@ -67,7 +66,7 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
         }
 
         // --- Display ---
-        ImGui::SeparatorText("Display Defaults");
+        ImGui::SeparatorText("Display");
         {
             // Applied live to style.FontScaleMain by the main loop; ImGui 1.92+
             // re-rasterises glyphs at the scaled size, so text stays sharp.
@@ -82,12 +81,8 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
                 ImGui::GetStyle().FontScaleMain = 1.0f;
                 other_changed = true;
             }
-            if (ImGui::SliderInt("Brightness", &s.default_brightness, -150, 150))
-                display_changed = true;
-            if (ImGui::SliderFloat("Contrast", &s.default_contrast, 0.0f, 3.0f, "%.2f"))
-                display_changed = true;
-            if (ImGui::Checkbox("Pivot Mid-Gray", &s.default_pivot_midgray))
-                display_changed = true;
+            // Brightness / contrast are not here: they are adjusted live in
+            // the transport bar, and every session starts neutral.
         }
 
         // --- Keypoint Colors ---
@@ -242,15 +237,10 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
             s = defaults;
             g_keypoint_colormap = s.keypoint_colormap;
             apply_keypoint_colormap(ctx.skeleton, g_keypoint_colormap);
-            display_changed = playback_changed = other_changed = true;
+            playback_changed = other_changed = true;
         }
         // Propagate only the sections that actually changed (no auto-save;
         // user presses "Save" explicitly to persist to disk)
-        if (display_changed) {
-            ctx.display.brightness = s.default_brightness;
-            ctx.display.contrast = s.default_contrast;
-            ctx.display.pivot_midgray = s.default_pivot_midgray;
-        }
         if (playback_changed) {
             ctx.ps.set_playback_speed = s.default_playback_speed;
             ctx.ps.realtime_playback = s.default_realtime_playback;

@@ -407,9 +407,8 @@ int main(int argc, char **argv) {
     ps.set_playback_speed = user_settings.default_playback_speed;
     ps.realtime_playback = user_settings.default_realtime_playback;
     DisplayState display;
-    display.brightness = user_settings.default_brightness;
-    display.contrast = user_settings.default_contrast;
-    display.pivot_midgray = user_settings.default_pivot_midgray;
+    // Brightness / contrast start neutral (DisplayState's defaults) and are
+    // set in the transport bar.
 
     // variables for project management
     ProjectManager pm = ProjectManager();
