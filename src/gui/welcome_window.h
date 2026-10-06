@@ -62,28 +62,11 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
         float spacing = 10.0f;
         float start_x = (avail - 2 * btn_w - spacing) * 0.5f;
 
-        // Making or opening a project is what red is for: those two first.
+        // One per row, in the order a first-time user meets them: look at
+        // the videos, make a project of them, come back to it.
+        const ImVec2 row(2 * btn_w + spacing, 30);
         ImGui::SetCursorPosX(start_x);
-        if (ImGui::Button("Create Project", ImVec2(btn_w, 30)))
-            win.annotation.open();
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Pick the videos or images, the cameras and a\n"
-                              "skeleton, and start labeling.");
-        ImGui::SameLine(0, spacing);
-        if (ImGui::Button("Load Project", ImVec2(btn_w, 30))) {
-            IGFD::FileDialogConfig cfg;
-            cfg.countSelectionMax = 1;
-            cfg.path = default_project_root(ctx.user_settings, ctx.default_dir);
-            cfg.flags = ImGuiFileDialogFlags_Modal;
-            ImGuiFileDialog::Instance()->OpenDialog(
-                "ChooseProject", "Load Project",
-                "Red Project{.redproj}", cfg);
-        }
-
-        // Just watch: videos without a project (no labels saved).
-        ImGui::Spacing();
-        ImGui::SetCursorPosX(start_x);
-        if (ImGui::Button("Open Videos", ImVec2(2 * btn_w + spacing, 30))) {
+        if (ImGui::Button("Open Videos", row)) {
             IGFD::FileDialogConfig cfg;
             cfg.countSelectionMax = 0;
             cfg.path = media_browse_dir(ctx);
@@ -95,6 +78,26 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Play videos without a project.");
 
+        ImGui::Spacing();
+        ImGui::SetCursorPosX(start_x);
+        if (ImGui::Button("Create Project", row))
+            win.annotation.open();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Pick the videos or images, the cameras and a\n"
+                              "skeleton, and start labeling.");
+
+        ImGui::Spacing();
+        ImGui::SetCursorPosX(start_x);
+        if (ImGui::Button("Load Project", row)) {
+            IGFD::FileDialogConfig cfg;
+            cfg.countSelectionMax = 1;
+            cfg.path = default_project_root(ctx.user_settings, ctx.default_dir);
+            cfg.flags = ImGuiFileDialogFlags_Modal;
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "ChooseProject", "Load Project",
+                "Red Project{.redproj}", cfg);
+        }
+
         // A tailcycle session is not a red project -- it brings its own
         // cameras, calibration and skeleton -- but opening one is the same
         // kind of act as loading a project, so it belongs up here. Full width
@@ -104,8 +107,7 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
             // Line it up under the buttons above.
             ImGui::SetCursorPosX(start_x);
             ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
-            if (ImGui::Button("Open tailcycle Dataset",
-                              ImVec2(2 * btn_w + spacing, 30))) {
+            if (ImGui::Button("Open tailcycle Dataset", row)) {
                 run_or_confirm_unsaved(ctx, [&win]() {
                     tailcycle_open_browse(win.tailcycle_open);
                 });
