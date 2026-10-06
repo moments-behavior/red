@@ -136,6 +136,23 @@ inline void DrawLabelingToolWindow(
                     ImVec4 col = instance_color(info, id, i);
                     ImGui::ColorButton("##clr", col, ImGuiColorEditFlags_NoTooltip,
                                        ImVec2(14, 14));
+                    // Absent from the camera in focus: the square drawn
+                    // hollow, an outline in its colour.
+                    {
+                        const auto &fa_i = fit->second[(size_t)i];
+                        int cam = 0;
+                        for (int c = 0; c < (int)ctx.is_view_focused.size(); ++c)
+                            if (ctx.is_view_focused[c]) { cam = c; break; }
+                        if (cam < (int)fa_i.cameras.size() &&
+                            fa_i.cameras[(size_t)cam].is_absent()) {
+                            ImDrawList *dl = ImGui::GetWindowDrawList();
+                            const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+                            dl->AddRectFilled(a, b, ImGui::GetColorU32(ImGuiCol_WindowBg));
+                            dl->AddRect(a, b, ImGui::GetColorU32(col), 0.0f, 0, 2.0f);
+                            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                                ImGui::SetTooltip("Absent from this camera");
+                        }
+                    }
                     if (ImGui::IsItemHovered() &&
                         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
                         ImGui::OpenPopup("##pick_color");
