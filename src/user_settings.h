@@ -14,6 +14,7 @@ struct UserSettings {
     // last skeleton .json picked or saved, so the next dialog starts there.
     std::string last_project_root;
     std::string last_skeleton_dir;
+    std::string last_media_dir;   // where videos/images were last opened from
 
     // Display defaults
     // UI text scale. ImGui 1.92+ re-rasterises at the scaled size, so this is
@@ -85,6 +86,7 @@ inline void to_json(nlohmann::json &j, const UserSettings &s) {
         {"default_media_root_path", s.default_media_root_path},
         {"last_project_root", s.last_project_root},
         {"last_skeleton_dir", s.last_skeleton_dir},
+        {"last_media_dir", s.last_media_dir},
         {"ui_text_scale", s.ui_text_scale},
         {"default_brightness", s.default_brightness},
         {"default_contrast", s.default_contrast},
@@ -110,6 +112,7 @@ inline void from_json(const nlohmann::json &j, UserSettings &s) {
         j.value("default_media_root_path", std::string{});
     s.last_project_root = j.value("last_project_root", std::string{});
     s.last_skeleton_dir = j.value("last_skeleton_dir", std::string{});
+    s.last_media_dir = j.value("last_media_dir", std::string{});
     s.ui_text_scale = j.value("ui_text_scale", 1.0f);
     s.default_brightness = j.value("default_brightness", 0);
     s.default_contrast = j.value("default_contrast", 1.0f);

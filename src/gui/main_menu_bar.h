@@ -31,7 +31,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         if (ImGui::MenuItem("Open Video(s)")) {
             IGFD::FileDialogConfig config;
             config.countSelectionMax = 0;
-            config.path = pm.media_folder;
+            config.path = media_browse_dir(ctx);
             config.flags = ImGuiFileDialogFlags_Modal;
             ImGuiFileDialog::Instance()->OpenDialog(
                 "ChooseMedia", "Choose Media", video_ext_filter(), config);
@@ -39,7 +39,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         if (ImGui::MenuItem("Open Images")) {
             IGFD::FileDialogConfig config;
             config.countSelectionMax = 0;
-            config.path = pm.media_folder;
+            config.path = media_browse_dir(ctx);
             config.flags = ImGuiFileDialogFlags_Modal;
             ImGuiFileDialog::Instance()->OpenDialog(
                 "ChooseImages", "Choose Images", image_ext_filter(), config);

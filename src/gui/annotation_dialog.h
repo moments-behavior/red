@@ -64,6 +64,7 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
             std::filesystem::path chosen(
                 ImGuiFileDialog::Instance()->GetCurrentPath());
             state.media_folder = chosen.string();
+            remember_media_dir(ctx, state.media_folder);
             state.discovered_cameras =
                 discover_media_cameras(state.media_folder, &state.media_kind);
             state.camera_selected.assign(state.discovered_cameras.size(), true);
@@ -198,7 +199,8 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
             if (ImGui::Button("Browse##annot_video")) {
                 IGFD::FileDialogConfig cfg;
                 cfg.countSelectionMax = 1;
-                cfg.path = state.media_folder;
+                cfg.path = state.media_folder.empty() ? media_browse_dir(ctx)
+                                                      : state.media_folder;
                 cfg.flags = ImGuiFileDialogFlags_Modal;
                 open_folder_dialog("ChooseAnnotVideoDir", "Choose Media Folder",
                                    media_folder_kind(), cfg);

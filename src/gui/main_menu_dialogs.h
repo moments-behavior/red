@@ -354,6 +354,7 @@ inline void HandleMainMenuDialogs(
             auto selected_files =
                 ImGuiFileDialog::Instance()->GetSelection();
             pm.media_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
+            remember_media_dir(ctx, pm.media_folder);
             pm.project_name =
                 dir_difference(pm.media_folder, media_root_dir);
             load_videos(selected_files, ctx.ps, pm, ctx.window_was_decoding,
@@ -372,6 +373,7 @@ inline void HandleMainMenuDialogs(
             auto selected_files =
                 ImGuiFileDialog::Instance()->GetSelection();
             pm.media_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
+            remember_media_dir(ctx, pm.media_folder);
             pm.project_name =
                 dir_difference(pm.media_folder, media_root_dir);
             load_images(selected_files, ctx.ps, pm, ctx.imgs_names, ctx.scene,

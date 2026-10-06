@@ -109,6 +109,29 @@ inline void remember_skeleton_dir(AppContext &ctx, const std::string &file) {
     save_user_settings(ctx.user_settings);
 }
 
+// Where Open Videos / Open Images / the Media Folder picker start: the media
+// open now, else the folder media was last opened from, else Settings' media
+// folder, else home -- never red's working directory (/ from Finder).
+inline std::string media_browse_dir(const AppContext &ctx) {
+    std::error_code ec;
+    auto usable = [&](const std::string &d) {
+        return !d.empty() && std::filesystem::is_directory(d, ec);
+    };
+    if ((ctx.ps.video_loaded || ctx.input_is_imgs) && usable(ctx.pm.media_folder))
+        return ctx.pm.media_folder;
+    if (usable(ctx.user_settings.last_media_dir))
+        return ctx.user_settings.last_media_dir;
+    if (usable(ctx.user_settings.default_media_root_path))
+        return ctx.user_settings.default_media_root_path;
+    return get_home_directory();
+}
+
+inline void remember_media_dir(AppContext &ctx, const std::string &dir) {
+    if (dir.empty() || dir == ctx.user_settings.last_media_dir) return;
+    ctx.user_settings.last_media_dir = dir;
+    save_user_settings(ctx.user_settings);
+}
+
 // Copy the shipped default_imgui_layout.ini into a project folder.
 // No-op if ini already exists.
 // Where this project's layout is kept, seeding it from the shipped default if

@@ -66,6 +66,7 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
         if (ImGui::Button("Open Videos", ImVec2(btn_w, 30))) {
             IGFD::FileDialogConfig cfg;
             cfg.countSelectionMax = 0;
+            cfg.path = media_browse_dir(ctx);
             cfg.flags = ImGuiFileDialogFlags_Modal;
             ImGuiFileDialog::Instance()->OpenDialog(
                 "ChooseMedia", "Select Video(s)",
