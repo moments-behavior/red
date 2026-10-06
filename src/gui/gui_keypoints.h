@@ -1,6 +1,7 @@
 #pragma once
 #include "annotation.h"
 #include "keypoint_colors.h"   // reproj_thresholds
+#include <imgui_internal.h>     // GetActiveID (the threshold bar)
 #include "implot.h"
 #include "render.h"
 #include "skeleton.h"
@@ -785,6 +786,66 @@ inline ImVec4 reprojection_error_color(double err) {
     if (err <= reproj_thresholds().good) return ImVec4(0.25f, 0.9f, 0.3f, 1.0f);
     if (err <= reproj_thresholds().bad) return ImVec4(1.0f, 0.85f, 0.2f, 1.0f);
     return ImVec4(1.0f, 0.25f, 0.2f, 1.0f);
+}
+
+// The reprojection thresholds as one bar: green | yellow | red from 0 to a
+// scale, with a handle at each boundary to drag (they cannot cross). The
+// values are shown beside it. Returns true when one moved.
+inline bool reproj_threshold_bar(const char *id, float &good, float &bad,
+                                 float width = 200.0f) {
+    ImGui::PushID(id);
+    // The scale fits the values, but holds still during a drag so the bar
+    // does not rescale under the pointer.
+    static float drag_scale = 0.0f;
+    static ImGuiID drag_id = 0;
+    static int which = 0;
+    const ImGuiID bar_id = ImGui::GetID("##bar");
+    const bool dragging = ImGui::GetActiveID() == bar_id && drag_id == bar_id;
+    const float scale = dragging && drag_scale > 0
+                            ? drag_scale
+                            : std::max(20.0f, std::ceil(bad * 1.25f / 5.0f) * 5.0f);
+    const float h = ImGui::GetFrameHeight();
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton("##bar", ImVec2(width, h));
+    const bool hovered = ImGui::IsItemHovered(), active = ImGui::IsItemActive();
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    auto x_of = [&](float v) { return p0.x + std::clamp(v / scale, 0.0f, 1.0f) * width; };
+    const float y0 = p0.y + h * 0.3f, y1 = p0.y + h * 0.7f;
+    const float xg = x_of(good), xb = x_of(bad);
+    dl->AddRectFilled(ImVec2(p0.x, y0), ImVec2(xg, y1), IM_COL32(64, 230, 77, 220));
+    dl->AddRectFilled(ImVec2(xg, y0), ImVec2(xb, y1), IM_COL32(255, 217, 51, 220));
+    dl->AddRectFilled(ImVec2(xb, y0), ImVec2(p0.x + width, y1), IM_COL32(255, 64, 51, 220));
+
+    // Which handle a drag moves: the one nearer where it began.
+    const ImGuiID me = ImGui::GetItemID();
+    bool changed = false;
+    if (ImGui::IsItemActivated()) {
+        drag_id = me;
+        drag_scale = scale;
+        which = std::fabs(ImGui::GetIO().MousePos.x - xg) <=
+                        std::fabs(ImGui::GetIO().MousePos.x - xb) ? 0 : 1;
+    }
+    if (active && drag_id == me) {
+        float v = (ImGui::GetIO().MousePos.x - p0.x) / width * scale;
+        v = std::round(std::clamp(v, 0.1f, scale) * 10.0f) / 10.0f;   // 0.1 px steps
+        if (which == 0) { v = std::min(v, bad); if (v != good) { good = v; changed = true; } }
+        else            { v = std::max(v, good); if (v != bad) { bad = v; changed = true; } }
+    }
+    for (int i = 0; i < 2; ++i) {
+        const float x = i == 0 ? x_of(good) : x_of(bad);
+        const bool hot = (active && drag_id == me && which == i);
+        dl->AddRectFilled(ImVec2(x - 3, p0.y + 1), ImVec2(x + 3, p0.y + h - 1),
+                          hot ? IM_COL32(255, 255, 255, 255) : IM_COL32(220, 220, 220, 230),
+                          2.0f);
+    }
+    if (hovered && !active)
+        ImGui::SetTooltip("Drag a handle: green up to %.1f px, yellow up to %.1f px, "
+                          "red above (scale 0-%.0f px)", good, bad, scale);
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%.1f / %.1f px", good, bad);
+    ImGui::PopID();
+    return changed;
 }
 
 // Reprojection-error colours for one camera's keypoints (the two above).

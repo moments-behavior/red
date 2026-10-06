@@ -1802,15 +1802,9 @@ int main(int argc, char **argv) {
                                 float good = user_settings.reproj_good_px;
                                 float bad = user_settings.reproj_bad_px;
                                 ImGui::Indent();
-                                ImGui::SetNextItemWidth(90.0f);
-                                const bool g = ImGui::DragFloat("green up to##rg", &good, 0.1f,
-                                                                0.1f, 100.0f, "%.1f px");
-                                ImGui::SetNextItemWidth(90.0f);
-                                const bool b = ImGui::DragFloat("yellow up to##rb", &bad, 0.1f,
-                                                                0.1f, 200.0f, "%.1f px");
-                                ImGui::TextDisabled("red above");
+                                if (reproj_threshold_bar("##reproj_bar", good, bad))
+                                    set_reproj_thresholds(ctx, good, bad);
                                 ImGui::Unindent();
-                                if (g || b) set_reproj_thresholds(ctx, good, bad);
                             }
                             ImGui::EndPopup();
                         }

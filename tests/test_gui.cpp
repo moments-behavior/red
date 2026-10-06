@@ -1101,6 +1101,47 @@ static void test_bbox_ui_first_box_copies_instances() {
                 find_instance(amap[3], 1)->cameras[0].has_bbox());
 }
 
+// The two-handle threshold bar: a drag moves the handle nearer where it began,
+// and the handles cannot cross.
+static void test_reproj_threshold_bar() {
+    printf("  test_reproj_threshold_bar...\n");
+    bbox_ui::Headless ui;
+    float good = 2.0f, bad = 5.0f;
+    ImVec2 bar0, bar1;
+    auto run = [&](ImVec2 mouse, bool down) {
+        ImGuiIO &io = ImGui::GetIO();
+        io.AddMousePosEvent(mouse.x, mouse.y);
+        io.AddMouseButtonEvent(0, down);
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(0, 0));
+        ImGui::SetNextWindowSize(ImVec2(400, 100));
+        ImGui::Begin("w", nullptr, ImGuiWindowFlags_NoDecoration);
+        bar0 = ImGui::GetCursorScreenPos();
+        reproj_threshold_bar("##t", good, bad, 200.0f);
+        bar1 = ImVec2(bar0.x + 200.0f, bar0.y + ImGui::GetFrameHeight());
+        ImGui::End();
+        ImGui::Render();
+    };
+    run(ImVec2(-1, -1), false);
+    const float y = (bar0.y + bar1.y) * 0.5f;
+    auto x_at = [&](float v) { return bar0.x + v / 20.0f * 200.0f; };   // scale 0-20 px
+    // Grab the yellow handle (at 5 px) and drag it to 10 px.
+    run(ImVec2(x_at(5.0f), y), false);
+    run(ImVec2(x_at(5.0f), y), false);
+    run(ImVec2(x_at(5.0f), y), true);
+    run(ImVec2(x_at(10.0f), y), true);
+    run(ImVec2(x_at(10.0f), y), false);
+    EXPECT_NEAR(good, 2.0, 1e-6);
+    EXPECT_NEAR(bad, 10.0, 0.2);
+    // Grab the green handle and try to drag it past yellow: it stops there.
+    run(ImVec2(x_at(2.0f), y), false);
+    run(ImVec2(x_at(2.0f), y), true);
+    run(ImVec2(x_at(15.0f), y), true);
+    run(ImVec2(x_at(15.0f), y), false);
+    EXPECT_TRUE(good <= bad);
+    EXPECT_NEAR(good, bad, 0.2);
+}
+
 int main() {
     test_current_date_time();
 
@@ -1120,6 +1161,7 @@ int main() {
     test_bbox_ui_drag_corner();
     test_bbox_ui_first_box_copies_instances();
     test_reprojection_error_colors();
+    test_reproj_threshold_bar();
 
     // Transport bar + UI overhaul tests
     test_transport_bar_state_defaults();

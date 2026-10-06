@@ -141,11 +141,9 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
                 "Applies to all camera views and the Keypoints table.");
             // Also in a view's right-click menu, under By reprojection error.
             float good = s.reproj_good_px, bad = s.reproj_bad_px;
-            const bool g = ImGui::DragFloat("Reprojection: green up to", &good, 0.1f,
-                                            0.1f, 100.0f, "%.1f px");
-            const bool b = ImGui::DragFloat("Reprojection: yellow up to", &bad, 0.1f,
-                                            0.1f, 200.0f, "%.1f px");
-            if (g || b) set_reproj_thresholds(ctx, good, bad);   // saves
+            ImGui::TextUnformatted("Reprojection error colours");
+            if (reproj_threshold_bar("##reproj_bar_settings", good, bad))
+                set_reproj_thresholds(ctx, good, bad);   // saves
         }
 
         // --- Playback ---
