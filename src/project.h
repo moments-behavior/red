@@ -15,7 +15,9 @@ struct AnnotationConfig {
     bool enable_keypoints    = true;  // default on (existing behavior)
     bool enable_bboxes       = false;
     bool enable_obbs         = false;
-    std::vector<std::string> class_names = {"animal"};
+    // Box classes (bbox/OBB tools). Empty in a new project: the first box
+    // adds Class_1. Older projects saved {"animal"} and keep it.
+    std::vector<std::string> class_names;
 };
 
 inline void to_json(nlohmann::json &j, const AnnotationConfig &a) {
@@ -29,7 +31,7 @@ inline void from_json(const nlohmann::json &j, AnnotationConfig &a) {
     a.enable_keypoints    = j.value("enable_keypoints", true);
     a.enable_bboxes       = j.value("enable_bboxes", false);
     a.enable_obbs         = j.value("enable_obbs", false);
-    a.class_names         = j.value("class_names", std::vector<std::string>{"animal"});
+    a.class_names         = j.value("class_names", std::vector<std::string>{});
 }
 
 struct ProjectManager {

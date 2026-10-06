@@ -1,14 +1,16 @@
 #pragma once
 // bbox_tool.h — Axis-aligned bounding box labeling tool
 //
-// Shift+drag draws a new bbox: press with Shift held, drag, let go. Bboxes are stored in the unified
-// AnnotationMap (CameraAnnotation extras). Class/ID selection,
-// keyboard shortcuts, and ImPlot interaction follow the original patterns.
+// Shift+drag draws a new bbox: press with Shift held, drag, let go. Bboxes are
+// stored in the unified AnnotationMap (CameraAnnotation extras), on the animal
+// being edited (active_instance; N picks the next). The class list is the
+// project's (pm.annotation_config.class_names), so it is saved with it.
 
 #include "imgui.h"
 #include "implot.h"
 #include "annotation.h"
 #include "app_context.h"
+#include "gui/gui_keypoints.h"   // keypoint_hovered_now: F is shared
 #include "gui/panel.h"
 #include <algorithm>
 #include <cmath>
@@ -19,102 +21,126 @@ struct BBoxToolState {
     bool show = false;
     bool enabled = false; // master toggle for bbox drawing mode
 
-    // Class and instance tracking
-    // Empty until the first box (or + Add Class / N) makes Class_1.
-    std::vector<std::string> class_names;
-    std::vector<ImVec4> class_colors;
-    int current_class = 0;
-    int current_instance = 0;
+    int current_class = 0;      // index into the project's class list
     bool show_ids = true;
+    // Set when a class is added from the views; the caller saves the project.
+    bool classes_changed = false;
 
     // Drawing state
     bool drawing = false;       // currently dragging out a new bbox
     int drawing_cam = -1;       // the camera view it is being drawn in
     double start_x = 0, start_y = 0;
 
-    // Hover state
-    bool hovered = false;       // bbox under cursor on this frame
+    // Hover state: the box under the pointer, by camera and animal (index
+    // into the frame's instances).
+    bool hovered = false;
     int hovered_cam = -1;
-
-    ImVec4 next_class_color() const {
-        float hue = class_colors.size() * 0.618033f;
-        hue -= std::floor(hue);
-        return (ImVec4)ImColor::HSV(hue, 0.85f, 0.95f);
-    }
-
-    // Adds Class_<n+1> and makes it current.
-    void add_class() {
-        const int n = (int)class_names.size();
-        class_names.push_back("Class_" + std::to_string(n + 1));
-        class_colors.push_back(next_class_color());
-        current_class = n;
-        current_instance = 0;
-    }
-    ImVec4 current_color() const {
-        return current_class >= 0 && current_class < (int)class_colors.size()
-                   ? class_colors[current_class]
-                   : ImVec4(0.3f, 1.0f, 1.0f, 1.0f);
-    }
+    int hovered_instance = -1;
 };
 
-// Draw bbox rectangles on a camera's ImPlot view
-inline void bbox_draw_overlays(BBoxToolState &state, const AnnotationMap &amap,
-                                u32 frame, int cam_idx, int img_w, int img_h) {
+// A class's colour, the same every session: the first cyan, the rest spread
+// round the hue circle by the golden ratio.
+inline ImVec4 box_class_color(int i) {
+    if (i <= 0) return ImVec4(0.3f, 1.0f, 1.0f, 1.0f);
+    float hue = i * 0.618033f;
+    hue -= std::floor(hue);
+    return (ImVec4)ImColor::HSV(hue, 0.85f, 0.95f);
+}
+
+inline const char *box_class_name(const std::vector<std::string> &classes, int i) {
+    return i >= 0 && i < (int)classes.size() ? classes[i].c_str() : "?";
+}
+
+// Adds Class_<n+1> to the list and makes it current.
+inline void add_box_class(BBoxToolState &state, std::vector<std::string> &classes) {
+    state.current_class = (int)classes.size();
+    classes.push_back("Class_" + std::to_string(classes.size() + 1));
+}
+
+// The class a new box gets: the current one, after making Class_1 if the list
+// is empty (a new project's is).
+inline int box_class_for_new(BBoxToolState &state, std::vector<std::string> &classes) {
+    if (classes.empty()) {
+        add_box_class(state, classes);
+        state.classes_changed = true;
+    }
+    state.current_class = std::clamp(state.current_class, 0, (int)classes.size() - 1);
+    return state.current_class;
+}
+
+// The animal a new box or OBB goes on: the one being edited, or a new first
+// animal on a frame that has none.
+inline FrameAnnotation &box_target(AnnotationMap &amap, u32 frame,
+                                   int active_instance, int num_nodes,
+                                   int num_cameras) {
+    auto it = amap.find(frame);
+    if (it != amap.end() && !it->second.empty())
+        return instance_or_first(it->second, active_instance);
+    return get_or_create_frame(amap, frame, num_nodes, num_cameras);
+}
+
+// Keys for the box tools: plain presses only, so Cmd/Ctrl shortcuts that
+// share the letter do not also fire them.
+inline bool box_key(ImGuiKey k) {
+    const ImGuiIO &io = ImGui::GetIO();
+    return !io.WantTextInput && !io.KeyCtrl && !io.KeySuper && !io.KeyAlt &&
+           ImGui::IsKeyPressed(k, false);
+}
+
+// Draw bbox rectangles on a camera's ImPlot view: every animal's.
+inline void bbox_draw_overlays(const BBoxToolState &state,
+                               const std::vector<std::string> &classes,
+                               const AnnotationMap &amap, u32 frame,
+                               int cam_idx, int img_w, int img_h) {
+    (void)img_w;
     // Draw in-progress bbox (while shift-dragging), in its own view only
     if (state.drawing && cam_idx == state.drawing_cam) {
         ImPlotPoint mouse = ImPlot::GetPlotMousePos();
         double dxs[] = {state.start_x, mouse.x, mouse.x, state.start_x, state.start_x};
         double dys[] = {state.start_y, state.start_y, mouse.y, mouse.y, state.start_y};
-        ImVec4 c = state.current_color();
         ImPlotSpec nspec;
-        nspec.LineColor = c;
+        nspec.LineColor = box_class_color(state.current_class);
         ImPlot::PlotLine("##bbox_new", dxs, dys, 5, nspec);
     }
 
     auto it = amap.find(frame);
-    if (it == amap.end() || it->second.empty()) return;
-    // The bbox tools work on the animal being labelled; multi-animal boxes
-    // wait on the active-instance UI.
-    const auto &fa = it->second.front();
+    if (it == amap.end()) return;
+    const FrameInstances &fis = it->second;
+    for (size_t inst = 0; inst < fis.size(); ++inst) {
+        const FrameAnnotation &fa = fis[inst];
+        if (cam_idx >= (int)fa.cameras.size()) continue;
+        const auto &cam = fa.cameras[cam_idx];
+        if (!cam.has_bbox()) continue;
 
-    if (cam_idx >= (int)fa.cameras.size()) return;
-    const auto &cam = fa.cameras[cam_idx];
-    if (!cam.has_bbox()) return;
+        const int ci = fa.category_id;
+        ImVec4 color = box_class_color(ci);
+        const bool hot = state.hovered && cam_idx == state.hovered_cam &&
+                         (int)inst == state.hovered_instance;
+        if (!hot) color.w *= 0.6f;
 
-    int ci = fa.category_id;
-    ImVec4 color = (ci < (int)state.class_colors.size())
-                       ? state.class_colors[ci]
-                       : ImVec4(1, 1, 1, 1);
+        double x1 = cam.extras->bbox_x;
+        double y1_img = cam.extras->bbox_y; // top-left in image coords
+        double x2 = x1 + cam.extras->bbox_w;
+        double y2_img = y1_img + cam.extras->bbox_h;
+        // Convert to ImPlot coords (Y is flipped: ImPlot y = img_h - img_y)
+        double y1_plot = img_h - y2_img;
+        double y2_plot = img_h - y1_img;
 
-    // Highlight hovered
-    if (!state.hovered || cam_idx != state.hovered_cam)
-        color.w *= 0.6f;
+        double xs[] = {x1, x2, x2, x1, x1};
+        double ys[] = {y1_plot, y1_plot, y2_plot, y2_plot, y1_plot};
+        ImPlotSpec bspec;
+        bspec.LineColor = color;
+        bspec.FillColor = ImVec4(color.x, color.y, color.z, 0.15f);
+        ImGui::PushID((int)inst);
+        ImPlot::PlotLine("##bbox", xs, ys, 5, bspec);
+        ImGui::PopID();
 
-    // Draw filled rect
-    double x1 = cam.extras->bbox_x;
-    double y1_img = cam.extras->bbox_y; // top-left in image coords
-    double x2 = x1 + cam.extras->bbox_w;
-    double y2_img = y1_img + cam.extras->bbox_h;
-    // Convert to ImPlot coords (Y is flipped: ImPlot y = img_h - img_y)
-    double y1_plot = img_h - y2_img;
-    double y2_plot = img_h - y1_img;
-
-    // ImPlot v1.0: item colors moved from PushStyleColor(ImPlotCol_Line/Fill)
-    // to a per-call ImPlotSpec.
-    double xs[] = {x1, x2, x2, x1, x1};
-    double ys[] = {y1_plot, y1_plot, y2_plot, y2_plot, y1_plot};
-    ImPlotSpec bspec;
-    bspec.LineColor = color;
-    bspec.FillColor = ImVec4(color.x, color.y, color.z, 0.15f);
-    ImPlot::PlotLine("##bbox", xs, ys, 5, bspec);
-
-    // Label
-    if (state.show_ids) {
-        char label[64];
-        snprintf(label, sizeof(label), "%s #%d",
-                 (ci < (int)state.class_names.size()) ? state.class_names[ci].c_str() : "?",
-                 fa.instance_id);
-        ImPlot::PlotText(label, x1 + 4, y2_plot - 4);
+        if (state.show_ids) {
+            char label[96];
+            snprintf(label, sizeof(label), "%s #%d", box_class_name(classes, ci),
+                     fa.instance_id);
+            ImPlot::PlotText(label, x1 + 4, y2_plot - 4);
+        }
     }
 }
 
@@ -139,7 +165,7 @@ inline void bbox_draw_cursor(const BBoxToolState &state, int cam_idx) {
     const ImVec2 m = ImGui::GetIO().MousePos;
     const ImVec2 lo = ImPlot::GetPlotPos();
     const ImVec2 hi(lo.x + ImPlot::GetPlotSize().x, lo.y + ImPlot::GetPlotSize().y);
-    const ImU32 col = ImGui::GetColorU32(state.current_color());
+    const ImU32 col = ImGui::GetColorU32(box_class_color(state.current_class));
     const ImU32 cross = IM_COL32(255, 255, 255, 150);
     dl->PushClipRect(lo, hi, true);
     dl->AddLine(ImVec2(lo.x, m.y), ImVec2(m.x - 5, m.y), cross);
@@ -153,10 +179,13 @@ inline void bbox_draw_cursor(const BBoxToolState &state, int cam_idx) {
     dl->PopClipRect();
 }
 
-// Handle bbox input on a focused camera view
-inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap,
-                               u32 frame, int cam_idx, int num_nodes,
-                               int num_cameras, int img_w, int img_h) {
+// Handle bbox input on a focused camera view. Boxes go on the animal being
+// edited (active_instance).
+inline void bbox_handle_input(BBoxToolState &state,
+                              std::vector<std::string> &classes,
+                              AnnotationMap &amap, u32 frame, int cam_idx,
+                              int active_instance, int num_nodes,
+                              int num_cameras, int img_w, int img_h) {
     if (!state.enabled) return;
     // A drag belongs to the view it started in; the others leave it alone.
     if (state.drawing && cam_idx != state.drawing_cam) return;
@@ -171,8 +200,6 @@ inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap,
     // Shift + press starts a box at the cursor ...
     if (!state.drawing && ImGui::GetIO().KeyShift &&
         ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        // The first box needs a class to belong to.
-        if (state.class_names.empty()) state.add_class();
         state.drawing = true;
         state.drawing_cam = cam_idx;
         state.start_x = mx;
@@ -200,129 +227,107 @@ inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap,
         // Skip tiny accidental drags
         if (x2 - x1 < 3 || y2_plot - y1_plot < 3) return;
 
-        // Convert to image coords (Y-flip)
-        double bbox_x = x1;
-        double bbox_y = img_h - y2_plot; // top-left in image coords
-        double bbox_w = x2 - x1;
-        double bbox_h = y2_plot - y1_plot;
-
-        // Get or create frame annotation
-        auto &fa = get_or_create_frame(amap, frame, num_nodes, num_cameras);
-        fa.category_id  = state.current_class;
-        fa.instance_id  = state.current_instance;
-
+        auto &fa = box_target(amap, frame, active_instance, num_nodes, num_cameras);
+        fa.category_id = box_class_for_new(state, classes);
         if (cam_idx < (int)fa.cameras.size()) {
             auto &ext = fa.cameras[cam_idx].get_extras();
-            ext.bbox_x = bbox_x;
-            ext.bbox_y = bbox_y;
-            ext.bbox_w = bbox_w;
-            ext.bbox_h = bbox_h;
+            ext.bbox_x = x1;
+            ext.bbox_y = img_h - y2_plot; // top-left in image coords (Y-flip)
+            ext.bbox_w = x2 - x1;
+            ext.bbox_h = y2_plot - y1_plot;
             ext.has_bbox = true;
         }
+        return;
     }
+    if (state.drawing) return;
 
-    // Hover detection
+    // Hover: the smallest box under the pointer, over every animal, so a box
+    // inside another can still be reached.
     state.hovered = false;
     state.hovered_cam = -1;
+    state.hovered_instance = -1;
     auto it = amap.find(frame);
-    if (it != amap.end() && !it->second.empty()) {
-        const auto &fa = it->second.front();
-        if (cam_idx < (int)fa.cameras.size()) {
+    if (it != amap.end()) {
+        double best_area = 0;
+        for (size_t inst = 0; inst < it->second.size(); ++inst) {
+            const auto &fa = it->second[inst];
+            if (cam_idx >= (int)fa.cameras.size()) continue;
             const auto &cam = fa.cameras[cam_idx];
-            if (cam.has_bbox()) {
-                double plot_y = img_h - cam.extras->bbox_y - cam.extras->bbox_h; // bottom in plot
-                if (mx >= cam.extras->bbox_x && mx <= cam.extras->bbox_x + cam.extras->bbox_w &&
-                    my >= plot_y && my <= plot_y + cam.extras->bbox_h) {
-                    state.hovered = true;
-                    state.hovered_cam = cam_idx;
-                }
+            if (!cam.has_bbox()) continue;
+            const auto &e = *cam.extras;
+            double plot_y = img_h - e.bbox_y - e.bbox_h; // bottom in plot
+            if (mx < e.bbox_x || mx > e.bbox_x + e.bbox_w || my < plot_y ||
+                my > plot_y + e.bbox_h)
+                continue;
+            const double area = e.bbox_w * e.bbox_h;
+            if (!state.hovered || area < best_area) {
+                state.hovered = true;
+                state.hovered_cam = cam_idx;
+                state.hovered_instance = (int)inst;
+                best_area = area;
             }
         }
     }
 
-    // Keyboard shortcuts below must not fire while typing in a text field.
-    if (ImGui::GetIO().WantTextInput) return;
-
-    // F key: delete hovered bbox from this camera
-    if (state.hovered && ImGui::IsKeyPressed(ImGuiKey_F)) {
-        auto &fis = amap[frame];
-        if (!fis.empty() && cam_idx < (int)fis.front().cameras.size()) {
-            auto &fa = fis.front();
+    if (state.hovered) {
+        auto &fa = it->second[(size_t)state.hovered_instance];
+        // F: delete the hovered box on this camera. A keypoint under the
+        // pointer keeps F for itself (delete it from all views).
+        if (!keypoint_hovered_now() && box_key(ImGuiKey_F)) {
             fa.cameras[cam_idx].get_extras().has_bbox = false;
+            state.hovered = false;
         }
-        state.hovered = false;
+        // O: delete that animal's box on every camera.
+        else if (box_key(ImGuiKey_O)) {
+            for (auto &cam : fa.cameras)
+                if (cam.has_bbox()) cam.get_extras().has_bbox = false;
+            state.hovered = false;
+        }
     }
 
-    // O key: delete all bboxes from ALL cameras on this frame
-    if (state.hovered && ImGui::IsKeyPressed(ImGuiKey_O)) {
-        auto it2 = amap.find(frame);
-        if (it2 != amap.end()) {
-            // "All boxes on this frame" means every camera of every animal.
-            for (auto &fa : it2->second)
-              for (auto &cam : fa.cameras) {
-                if (cam.has_bbox())
-                    cam.get_extras().has_bbox = false;
-            }
-        }
-        state.hovered = false;
-    }
-
-    // Z/X: switch class
-    const bool have_classes = !state.class_names.empty();
-    if (have_classes && ImGui::IsKeyPressed(ImGuiKey_Z)) {
-        state.current_class = (state.current_class - 1 + (int)state.class_names.size())
-                              % (int)state.class_names.size();
-        state.current_instance = 0;
-    }
-    if (have_classes && ImGui::IsKeyPressed(ImGuiKey_X)) {
-        state.current_class = (state.current_class + 1) % (int)state.class_names.size();
-        state.current_instance = 0;
-    }
-    // N key: create new class
-    if (ImGui::IsKeyPressed(ImGuiKey_N)) {
-        state.add_class();
-    }
-    // C/V: switch instance ID
-    if (ImGui::IsKeyPressed(ImGuiKey_C) && state.current_instance > 0)
-        state.current_instance--;
-    if (ImGui::IsKeyPressed(ImGuiKey_V))
-        state.current_instance++;
+    // Z/X: previous / next class.
+    const int n = (int)classes.size();
+    if (n > 0 && box_key(ImGuiKey_Z))
+        state.current_class = (state.current_class - 1 + n) % n;
+    if (n > 0 && box_key(ImGuiKey_X))
+        state.current_class = (state.current_class + 1) % n;
 }
 
 // Settings panel for the bbox tool
 inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
     DrawPanel("Bbox Tool", state.show,
         [&]() {
+        auto &classes = ctx.pm.annotation_config.class_names;
         ImGui::Checkbox("Enable Bbox Drawing", &state.enabled);
         ImGui::Checkbox("Show IDs", &state.show_ids);
 
         ImGui::Separator();
-        if (state.class_names.empty())
-            ImGui::TextDisabled("Class: none yet -- the first box adds Class_1");
-        else
-            ImGui::Text("Class: %s (%d)",
-                        state.class_names[state.current_class].c_str(),
-                        state.current_class);
-        ImGui::Text("Instance: %d", state.current_instance);
+        ImGui::TextWrapped("Shift+drag: draw a box on the animal being edited "
+                           "(N: next animal). Esc cancels.");
+        ImGui::TextWrapped("F: delete the hovered box (this camera)");
+        ImGui::TextWrapped("O: delete the hovered animal's box (all cameras)");
+        ImGui::TextWrapped("Z/X: previous / next class");
 
-        ImGui::Separator();
-        ImGui::TextWrapped("Shift+drag: draw bbox (Esc cancels)");
-        ImGui::TextWrapped("F: delete hovered bbox (this camera)");
-        ImGui::TextWrapped("O: delete hovered class (all cameras)");
-        ImGui::TextWrapped("Z/X: prev/next class, N: new class");
-        ImGui::TextWrapped("C/V: prev/next instance ID");
-
-        // Class list
+        // Class list: the project's, saved with it.
         ImGui::SeparatorText("Classes");
-        for (int i = 0; i < (int)state.class_names.size(); ++i) {
+        if (classes.empty())
+            ImGui::TextDisabled("None yet -- the first box adds Class_1.");
+        for (int i = 0; i < (int)classes.size(); ++i) {
             ImGui::ColorButton(("##clr" + std::to_string(i)).c_str(),
-                               state.class_colors[i], 0, ImVec2(14, 14));
+                               box_class_color(i), 0, ImVec2(14, 14));
             ImGui::SameLine();
             bool sel = (i == state.current_class);
-            if (ImGui::Selectable(state.class_names[i].c_str(), sel))
+            if (ImGui::Selectable((classes[i] + "##cls" + std::to_string(i)).c_str(), sel))
                 state.current_class = i;
         }
-        if (ImGui::Button("+ Add Class")) state.add_class();
+        if (ImGui::Button("+ Add Class")) {
+            add_box_class(state, classes);
+            state.classes_changed = true;
+        }
+        if (state.classes_changed) {
+            save_project_file(ctx.pm);
+            state.classes_changed = false;
+        }
         },
         nullptr, ImVec2(300, 350));
 }

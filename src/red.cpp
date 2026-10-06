@@ -1617,26 +1617,37 @@ int main(int argc, char **argv) {
                             int nn = skeleton.num_nodes;
                             int nc = (int)scene->num_cams;
 
-                            // Bbox tool
+                            // Bbox tool. Boxes go on the animal being
+                            // edited; classes are the project's.
+                            auto &box_classes = pm.annotation_config.class_names;
                             if (win.bbox.enabled) {
-                                bbox_handle_input(win.bbox, annotations,
-                                                  frame, j, nn, nc, iw, ih);
+                                bbox_handle_input(win.bbox, box_classes,
+                                                  annotations, frame, j,
+                                                  active_instance, nn, nc,
+                                                  iw, ih);
                                 bbox_draw_cursor(win.bbox, j);
                             }
                             if (display.show_bboxes) {
-                                bbox_draw_overlays(win.bbox, annotations,
-                                                   frame, j, iw, ih);
+                                bbox_draw_overlays(win.bbox, box_classes,
+                                                   annotations, frame, j,
+                                                   iw, ih);
                             }
 
                             // OBB tool
                             if (win.obb.enabled) {
-                                obb_handle_input(win.obb, win.bbox,
+                                obb_handle_input(win.obb, win.bbox, box_classes,
                                                  annotations, frame, j,
-                                                 nn, nc, iw, ih);
+                                                 active_instance, nn, nc,
+                                                 iw, ih);
                             }
                             if (display.show_bboxes) {
-                                obb_draw_overlays(win.obb, win.bbox,
+                                obb_draw_overlays(win.obb, win.bbox, box_classes,
                                                   annotations, frame, j, iw, ih);
+                            }
+                            // The first box of a new project added Class_1.
+                            if (win.bbox.classes_changed) {
+                                save_project_file(pm);
+                                win.bbox.classes_changed = false;
                             }
 
                             // Midline tool (line drawing in the line camera)

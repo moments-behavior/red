@@ -112,13 +112,11 @@ inline const std::vector<Group> &shortcut_groups() {
             {S::DeleteKeypoint, nullptr, "Delete keypoints", Gate::Always,
                  "Over a cell: that camera. Over a name: all cameras. Otherwise: the whole selection, all cameras"},
         }},
-        {"Bbox tool", "When the Bbox tool is enabled", Gate::ToolBbox, {
-            {S::COUNT, "Shift + drag", "Draw a box: press with Shift held, drag, let go (Esc cancels)"},
-            {S::COUNT, "F", "Delete the hovered box on this camera"},
-            {S::COUNT, "O", "Delete the hovered box on all cameras"},
-            {S::COUNT, "Z  /  X", "Previous / next class"},
-            {S::COUNT, "N", "New class"},
-            {S::COUNT, "C  /  V", "Previous / next instance id"},
+        {"Bbox tool", "When the Bbox tool is enabled, over a camera view", Gate::ToolBbox, {
+            {S::COUNT, "Shift + drag", "Draw a box on the animal being edited: press with Shift held, drag, let go (Esc cancels)"},
+            {S::COUNT, "F", "Delete the hovered box on this camera (a hovered keypoint takes F first)"},
+            {S::COUNT, "O", "Delete the hovered animal's box on all cameras"},
+            {S::COUNT, "Z  /  X", "Previous / next class (classes are saved with the project)"},
         }},
         {"OBB tool", "When the OBB tool is enabled", Gate::ToolObb, {
             {S::COUNT, "G  (\xC3\x97""3)", "Place axis point 1, axis point 2, then the corner"},

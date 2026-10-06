@@ -695,24 +695,42 @@ static void test_obb_contains_rotated() {
 static void test_bbox_next_class_color() {
     printf("  test_bbox_next_class_color...\n");
 
+    // Colours are valid and differ from class to class.
+    for (int i = 0; i < 6; ++i) {
+        const ImVec4 c = box_class_color(i);
+        EXPECT_TRUE(c.x >= 0 && c.x <= 1 && c.y >= 0 && c.y <= 1 &&
+                    c.z >= 0 && c.z <= 1 && c.w >= 0 && c.w <= 1);
+        if (i > 0) {
+            const ImVec4 p = box_class_color(i - 1);
+            EXPECT_TRUE(fabs(c.x - p.x) > 0.01 || fabs(c.y - p.y) > 0.01 ||
+                        fabs(c.z - p.z) > 0.01);
+        }
+    }
+}
+
+static void test_bbox_classes_and_target() {
+    printf("  test_bbox_classes_and_target...\n");
+
+    // The first box of a project with no classes makes Class_1.
     BBoxToolState state;
-    // Initial state has 1 class color
-    EXPECT_EQ((int)state.class_colors.size(), 1);
+    std::vector<std::string> classes;
+    EXPECT_EQ(box_class_for_new(state, classes), 0);
+    EXPECT_EQ((int)classes.size(), 1);
+    EXPECT_TRUE(classes[0] == "Class_1");
+    EXPECT_TRUE(state.classes_changed);
+    add_box_class(state, classes);
+    EXPECT_TRUE(classes[1] == "Class_2");
+    EXPECT_EQ(state.current_class, 1);
 
-    auto c1 = state.next_class_color();
-    // Should be a valid color (all components in [0,1])
-    EXPECT_TRUE(c1.x >= 0 && c1.x <= 1);
-    EXPECT_TRUE(c1.y >= 0 && c1.y <= 1);
-    EXPECT_TRUE(c1.z >= 0 && c1.z <= 1);
-    EXPECT_TRUE(c1.w >= 0 && c1.w <= 1);
-
-    // Adding a class and getting another color should be different
-    state.class_colors.push_back(c1);
-    auto c2 = state.next_class_color();
-    bool different = (fabs(c1.x - c2.x) > 0.01 ||
-                      fabs(c1.y - c2.y) > 0.01 ||
-                      fabs(c1.z - c2.z) > 0.01);
-    EXPECT_TRUE(different);
+    // A box goes on the animal being edited, not the frame's first.
+    AnnotationMap amap;
+    get_or_create_frame(amap, 5, 3, 2, /*instance_id*/ 0);
+    get_or_create_frame(amap, 5, 3, 2, /*instance_id*/ 7);
+    EXPECT_EQ(box_target(amap, 5, 1, 3, 2).instance_id, 7);
+    EXPECT_EQ(box_target(amap, 5, 0, 3, 2).instance_id, 0);
+    // A frame with no animals gets a first one.
+    EXPECT_EQ(box_target(amap, 9, 1, 3, 2).instance_id, 0);
+    EXPECT_EQ((int)amap[9].size(), 1);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -726,8 +744,7 @@ static void test_annotation_config_defaults() {
     EXPECT_TRUE(cfg.enable_keypoints);
     EXPECT_FALSE(cfg.enable_bboxes);
     EXPECT_FALSE(cfg.enable_obbs);
-    EXPECT_EQ((int)cfg.class_names.size(), 1);
-    EXPECT_TRUE(cfg.class_names[0] == "animal");
+    EXPECT_TRUE(cfg.class_names.empty());   // the first box adds Class_1
 }
 
 static void test_annotation_config_json_roundtrip() {
@@ -768,7 +785,7 @@ static void test_annotation_config_backward_compat() {
     // Should have defaults
     EXPECT_TRUE(cfg.enable_keypoints);
     EXPECT_FALSE(cfg.enable_bboxes);
-    EXPECT_EQ((int)cfg.class_names.size(), 1);
+    EXPECT_TRUE(cfg.class_names.empty());
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2255,6 +2272,7 @@ int main() {
 
     printf("\n--- Bbox Tool ---\n");
     test_bbox_next_class_color();
+    test_bbox_classes_and_target();
 
     printf("\n--- AnnotationConfig ---\n");
     test_annotation_config_defaults();

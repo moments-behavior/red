@@ -3,7 +3,7 @@
 //
 // 3-click construction: axis point 1, axis point 2, perpendicular corner.
 // OBBs are stored in AnnotationMap CameraAnnotation extras (cx, cy, w, h, angle).
-// Follows the same class/instance system as bbox_tool.h.
+// Same classes as bbox_tool.h; an OBB goes on the animal being edited.
 
 #include "imgui.h"
 #include "implot.h"
@@ -32,9 +32,10 @@ struct OBBToolState {
     double ax1_x = 0, ax1_y = 0;   // axis point 1 (ImPlot coords)
     double ax2_x = 0, ax2_y = 0;   // axis point 2 (ImPlot coords)
 
-    // Hover state
+    // Hover state: the OBB under the pointer, by camera and animal
     bool hovered = false;
     int hovered_cam = -1;
+    int hovered_instance = -1;
 };
 
 // Calculate OBB properties from 3 points in ImPlot coordinates.
@@ -100,51 +101,49 @@ inline bool obb_contains(double cx, double cy, double w, double h,
     return std::abs(lx) <= w / 2.0 && std::abs(ly) <= h / 2.0;
 }
 
-// Draw OBB overlays on a camera's ImPlot view
+// Draw OBB overlays on a camera's ImPlot view: every animal's.
 inline void obb_draw_overlays(OBBToolState &state, const BBoxToolState &bbox_state,
+                               const std::vector<std::string> &classes,
                                const AnnotationMap &amap, u32 frame,
                                int cam_idx, int img_w, int img_h) {
+    (void)img_w;
     auto it = amap.find(frame);
-    if (it == amap.end()) goto draw_construction;
-
-    {
-        if (it->second.empty()) return;
-        const auto &fa = it->second.front();
-        if (cam_idx < (int)fa.cameras.size()) {
+    if (it != amap.end()) {
+        const FrameInstances &fis = it->second;
+        for (size_t inst = 0; inst < fis.size(); ++inst) {
+            const auto &fa = fis[inst];
+            if (cam_idx >= (int)fa.cameras.size()) continue;
             const auto &cam = fa.cameras[cam_idx];
-            if (cam.has_obb()) {
-                // OBB stored in image coords; convert center Y to ImPlot
-                double plot_cx = cam.extras->obb_cx;
-                double plot_cy = img_h - cam.extras->obb_cy;
-                double angle = -cam.extras->obb_angle; // flip angle for Y inversion
+            if (!cam.has_obb()) continue;
+            // OBB stored in image coords; convert center Y to ImPlot
+            double plot_cx = cam.extras->obb_cx;
+            double plot_cy = img_h - cam.extras->obb_cy;
+            double angle = -cam.extras->obb_angle; // flip angle for Y inversion
 
-                int ci = fa.category_id;
-                ImVec4 color = (ci < (int)bbox_state.class_colors.size())
-                                   ? bbox_state.class_colors[ci]
-                                   : ImVec4(1, 1, 1, 1);
-                if (!state.hovered || cam_idx != state.hovered_cam)
-                    color.w *= 0.6f;
+            int ci = fa.category_id;
+            ImVec4 color = box_class_color(ci);
+            if (!state.hovered || cam_idx != state.hovered_cam ||
+                (int)inst != state.hovered_instance)
+                color.w *= 0.6f;
 
-                double xs[5], ys[5];
-                obb_get_corners(plot_cx, plot_cy, cam.extras->obb_w, cam.extras->obb_h, angle, xs, ys);
+            double xs[5], ys[5];
+            obb_get_corners(plot_cx, plot_cy, cam.extras->obb_w, cam.extras->obb_h, angle, xs, ys);
 
-                ImPlotSpec ospec;
-                ospec.LineColor = color;
-                ImPlot::PlotLine("##obb", xs, ys, 5, ospec);
+            ImPlotSpec ospec;
+            ospec.LineColor = color;
+            ImGui::PushID((int)inst);
+            ImPlot::PlotLine("##obb", xs, ys, 5, ospec);
+            ImGui::PopID();
 
-                if (bbox_state.show_ids) {
-                    char label[64];
-                    snprintf(label, sizeof(label), "%s #%d (OBB)",
-                             (ci < (int)bbox_state.class_names.size())
-                                 ? bbox_state.class_names[ci].c_str() : "?",
-                             fa.instance_id);
-                    ImPlot::PlotText(label, plot_cx, plot_cy);
-                }
+            if (bbox_state.show_ids) {
+                char label[96];
+                snprintf(label, sizeof(label), "%s #%d (OBB)",
+                         box_class_name(classes, ci), fa.instance_id);
+                ImPlot::PlotText(label, plot_cx, plot_cy);
             }
         }
     }
 
-draw_construction:
     // Draw construction preview
     if (state.draw_state == OBBDrawState::FirstPoint) {
         // Show axis_point1 + line to mouse
@@ -197,8 +196,9 @@ draw_construction:
 
 // Handle OBB input on a focused camera view
 inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
+                              std::vector<std::string> &classes,
                               AnnotationMap &amap, u32 frame, int cam_idx,
-                              int num_nodes, int num_cameras,
+                              int active_instance, int num_nodes, int num_cameras,
                               int img_w, int img_h) {
     if (!state.enabled) return;
     if (!ImPlot::IsPlotHovered()) return;
@@ -209,7 +209,7 @@ inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
 
     // G key advances the OBB state machine (G for "geometry";
     // W is reserved for keypoint labeling to avoid conflict)
-    if (!ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_G)) {
+    if (box_key(ImGuiKey_G)) {
         switch (state.draw_state) {
         case OBBDrawState::Idle:
             state.ax1_x = mx; state.ax1_y = my;
@@ -234,11 +234,10 @@ inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
             double img_cy = img_h - cy;
             double img_angle = -angle;
 
-            // Store in AnnotationMap
-            if (bbox_state.class_names.empty()) bbox_state.add_class();
-            auto &fa = get_or_create_frame(amap, frame, num_nodes, num_cameras);
-            fa.category_id  = bbox_state.current_class;
-            fa.instance_id  = bbox_state.current_instance;
+            // Store on the animal being edited
+            auto &fa = box_target(amap, frame, active_instance, num_nodes,
+                                  num_cameras);
+            fa.category_id = box_class_for_new(bbox_state, classes);
 
             if (cam_idx < (int)fa.cameras.size()) {
                 auto &ext = fa.cameras[cam_idx].get_extras();
@@ -261,38 +260,36 @@ inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
         state.draw_state = OBBDrawState::Idle;
     }
 
-    // Hover detection
+    // Hover detection: the smallest OBB under the pointer, any animal.
     state.hovered = false;
     state.hovered_cam = -1;
+    state.hovered_instance = -1;
     auto it = amap.find(frame);
-    if (it != amap.end()) {
-        if (it->second.empty()) return;
-        const auto &fa = it->second.front();
-        if (cam_idx < (int)fa.cameras.size()) {
-            const auto &cam = fa.cameras[cam_idx];
-            if (cam.has_obb()) {
-                double plot_cx = cam.extras->obb_cx;
-                double plot_cy = img_h - cam.extras->obb_cy;
-                double plot_angle = -cam.extras->obb_angle;
-
-                if (obb_contains(plot_cx, plot_cy, cam.extras->obb_w, cam.extras->obb_h,
-                                  plot_angle, mx, my)) {
-                    state.hovered = true;
-                    state.hovered_cam = cam_idx;
-                }
-            }
+    if (it == amap.end()) return;
+    double best_area = 0;
+    for (size_t inst = 0; inst < it->second.size(); ++inst) {
+        const auto &fa = it->second[inst];
+        if (cam_idx >= (int)fa.cameras.size()) continue;
+        const auto &cam = fa.cameras[cam_idx];
+        if (!cam.has_obb()) continue;
+        const auto &e = *cam.extras;
+        if (!obb_contains(e.obb_cx, img_h - e.obb_cy, e.obb_w, e.obb_h,
+                          -e.obb_angle, mx, my))
+            continue;
+        const double area = e.obb_w * e.obb_h;
+        if (!state.hovered || area < best_area) {
+            state.hovered = true;
+            state.hovered_cam = cam_idx;
+            state.hovered_instance = (int)inst;
+            best_area = area;
         }
     }
 
     // Delete key: delete hovered OBB from this camera. (Uses Delete, not T,
-    // because T is the global Triangulate shortcut — both handlers would fire.)
-    if (state.hovered && !ImGui::GetIO().WantTextInput &&
-        ImGui::IsKeyPressed(ImGuiKey_Delete)) {
-        auto &fis_ = amap[frame];
-        if (fis_.empty()) fis_.push_back(FrameAnnotation{});
-        auto &fa = fis_.front();
-        if (cam_idx < (int)fa.cameras.size())
-            fa.cameras[cam_idx].get_extras().has_obb = false;
+    // because T is the global Triangulate shortcut -- both handlers would fire.)
+    if (state.hovered && box_key(ImGuiKey_Delete)) {
+        it->second[(size_t)state.hovered_instance]
+            .cameras[cam_idx].get_extras().has_obb = false;
         state.hovered = false;
     }
 }
@@ -310,7 +307,7 @@ inline void DrawOBBToolWindow(OBBToolState &state, AppContext &ctx) {
         ImGui::Separator();
         ImGui::TextWrapped("G (3x): place axis point 1, axis point 2, corner");
         ImGui::TextWrapped("Escape: cancel construction");
-        ImGui::TextWrapped("T: delete hovered OBB");
+        ImGui::TextWrapped("Delete: delete hovered OBB");
         },
         nullptr, ImVec2(300, 250));
 }

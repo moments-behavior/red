@@ -11,6 +11,20 @@
 #include <sstream>
 #include <vector>
 
+// Whether the pointer is on a keypoint this frame. Tools sharing a key with
+// the keypoints (the bbox tool's F) leave it to them then; they run after the
+// keypoints of the same view.
+inline int &keypoint_hovered_frame() {
+    static int frame = -1;
+    return frame;
+}
+inline void mark_keypoint_hovered() {
+    keypoint_hovered_frame() = ImGui::GetFrameCount();
+}
+inline bool keypoint_hovered_now() {
+    return keypoint_hovered_frame() == ImGui::GetFrameCount();
+}
+
 // Per-animal tint. Applied to every node so two animals are told apart at a
 // glance even when they share a skeleton -- which they always do, since the
 // keypoint axis is per session, not per animal.
@@ -169,6 +183,7 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
             }
             if (occ_hovered) {
                 any_point_hovered = true;
+                mark_keypoint_hovered();
                 std::string label;
                 if (node < skeleton->node_names.size())
                     label = skeleton->node_names[node];
@@ -288,6 +303,7 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
 
             if (drag_point_hovered) {
                 any_point_hovered = true;
+                mark_keypoint_hovered();
                 std::string label;
                 if (node < skeleton->node_names.size())
                     label = skeleton->node_names[node];

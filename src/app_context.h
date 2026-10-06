@@ -109,6 +109,14 @@ inline void remember_skeleton_dir(AppContext &ctx, const std::string &file) {
     save_user_settings(ctx.user_settings);
 }
 
+// Writes the open project's .redproj after a project setting changes. An
+// Untitled project has no file yet; its first save writes everything.
+inline void save_project_file(const ProjectManager &pm) {
+    if (pm.untitled || pm.project_path.empty() || pm.project_name.empty()) return;
+    save_project_manager_json(
+        pm, std::filesystem::path(pm.project_path) / (pm.project_name + ".redproj"));
+}
+
 // Where Open Videos / Open Images / the Media Folder picker start: the media
 // open now, else the folder media was last opened from, else Settings' media
 // folder, else home -- never red's working directory (/ from Finder).
