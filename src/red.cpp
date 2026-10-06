@@ -1427,8 +1427,9 @@ int main(int argc, char **argv) {
                                 }
                                 if (keys::pressed(keys::Sc::CreateFrame)) {
                                     // create frame annotation
+                                    // With the instances of the frames around it.
                                     if (!keypoints_find) {
-                                        get_or_create_frame(annotations,
+                                        create_frame_instances(annotations,
                                             current_frame_num,
                                             skeleton.num_nodes,
                                             scene->num_cams);
@@ -1692,13 +1693,13 @@ int main(int argc, char **argv) {
                                 const u32 f = (u32)current_frame_num;
                                 auto it = annotations.find(f);
                                 if (it == annotations.end() || it->second.empty()) {
-                                    if (ImGui::MenuItem("No animal here (mark absent)")) {
-                                        auto &fa = get_or_create_frame(
-                                            annotations, f, skeleton.num_nodes,
-                                            (int)scene->num_cams);
-                                        if (j < fa.cameras.size())
-                                            set_absent(fa.cameras[j], true);
-                                        active_instance = 0;
+                                    // Every instance the frames around it have.
+                                    if (ImGui::MenuItem("No animal here (mark all absent)")) {
+                                        for (auto &fa : create_frame_instances(
+                                                 annotations, f, skeleton.num_nodes,
+                                                 (int)scene->num_cams))
+                                            if (j < fa.cameras.size())
+                                                set_absent(fa.cameras[j], true);
                                     }
                                 } else {
                                     const auto &info = pm.annotation_config.label_info;

@@ -743,11 +743,19 @@ static void test_bbox_classes_and_target() {
     active = 1;
     EXPECT_EQ(box_target(amap, 5, /*cam*/ 1, active, 3, 2, has_box).instance_id, 7);
 
-    // A frame with no instances gets a first one.
+    // A new frame starts with its neighbours' instances (frame 5's 0, 7 and
+    // 8, unlabelled), and the box goes on the one at the edited place.
     active = 1;
-    EXPECT_EQ(box_target(amap, 9, 0, active, 3, 2, has_box).instance_id, 0);
+    EXPECT_EQ(box_target(amap, 9, 0, active, 3, 2, has_box).instance_id, 7);
+    EXPECT_EQ(active, 1);
+    EXPECT_EQ((int)amap[9].size(), 3);
+    EXPECT_FALSE(amap[9][0].cameras[0].has_bbox());   // not carried over
+    // With nothing around it, just instance 0.
+    AnnotationMap lone;
+    active = 2;
+    EXPECT_EQ(box_target(lone, 4, 0, active, 3, 2, has_box).instance_id, 0);
     EXPECT_EQ(active, 0);
-    EXPECT_EQ((int)amap[9].size(), 1);
+    EXPECT_EQ((int)lone[4].size(), 1);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
