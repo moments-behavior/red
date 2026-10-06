@@ -55,15 +55,13 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
     // to prevent click-through from a closing dialog's Back button.
     ImGui::BeginDisabled(just_appeared);
 
-    // Quick actions row
+    // Open something to look at
     {
         float btn_w = 150.0f;
         float avail = ImGui::GetContentRegionAvail().x;
         float spacing = 10.0f;
         float start_x = (avail - 2 * btn_w - spacing) * 0.5f;
 
-        // One per row, in the order a first-time user meets them: look at
-        // the videos, make a project of them, come back to it.
         const ImVec2 row(2 * btn_w + spacing, 30);
         ImGui::SetCursorPosX(start_x);
         if (ImGui::Button("Open Videos", row)) {
@@ -78,30 +76,9 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Play videos without a project.");
 
-        ImGui::Spacing();
-        ImGui::SetCursorPosX(start_x);
-        if (ImGui::Button("Create Project", row))
-            win.annotation.open();
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Pick the videos or images, the cameras and a\n"
-                              "skeleton, and start labeling.");
-
-        ImGui::Spacing();
-        ImGui::SetCursorPosX(start_x);
-        if (ImGui::Button("Load Project", row)) {
-            IGFD::FileDialogConfig cfg;
-            cfg.countSelectionMax = 1;
-            cfg.path = default_project_root(ctx.user_settings, ctx.default_dir);
-            cfg.flags = ImGuiFileDialogFlags_Modal;
-            ImGuiFileDialog::Instance()->OpenDialog(
-                "ChooseProject", "Load Project",
-                "Red Project{.redproj}", cfg);
-        }
-
         // A tailcycle session is not a red project -- it brings its own
-        // cameras, calibration and skeleton -- but opening one is the same
-        // kind of act as loading a project, so it belongs up here. Full width
-        // because the name does not fit a 150px button.
+        // cameras, calibration and skeleton -- so it sits up here with Open
+        // Videos rather than under Annotate.
         if (TailcycleImport::available()) {
             ImGui::Spacing();
             // Line it up under the buttons above.
@@ -119,6 +96,29 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
                     "sessions. Brings its own cameras and skeleton.");
         }
     }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Annotate section
+    ImGui::TextColored(ImVec4(0.8f, 0.6f, 0.6f, 1.0f), "Annotate");
+    ImGui::Spacing();
+
+    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0, 0.5f));
+    if (ImGui::Button("Create Annotation Project", ImVec2(-1, 0))) {
+        win.annotation.open();
+    }
+    if (ImGui::Button("Load Annotation Project", ImVec2(-1, 0))) {
+        IGFD::FileDialogConfig cfg;
+        cfg.countSelectionMax = 1;
+        cfg.path = default_project_root(ctx.user_settings, ctx.default_dir);
+        cfg.flags = ImGuiFileDialogFlags_Modal;
+        ImGuiFileDialog::Instance()->OpenDialog(
+            "ChooseProject", "Load Annotation Project",
+            "Red Project{.redproj}", cfg);
+    }
+    ImGui::PopStyleVar();
 
     // Recent Projects section
     if (!ctx.user_settings.recent_projects.empty()) {
