@@ -1,6 +1,7 @@
 #pragma once
 #include "imgui.h"
 #include "app_context.h"
+#include "IconsForkAwesome.h"
 #include "video_files.h"
 #include "gui/window_states.h"
 #include "tailcycle_import.h"
@@ -128,26 +129,47 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Recent Projects");
         ImGui::Spacing();
 
+        // Each row ends in an x that takes it off the list (the project's
+        // files are untouched). Removed after the loop, not mid-iteration.
+        int remove_row = -1;
+        const float x_w = ImGui::GetFrameHeight();
+        const float gap = ImGui::GetStyle().ItemSpacing.x;
         for (int ri = 0; ri < (int)ctx.user_settings.recent_projects.size(); ri++) {
             const auto &path = ctx.user_settings.recent_projects[ri];
             std::filesystem::path p(path);
             std::string display = p.parent_path().filename().string() + "/" + p.filename().string();
-            if (!std::filesystem::exists(path)) {
+            ImGui::PushID(ri);  // unique ID per row
+            std::error_code ec;
+            if (!std::filesystem::exists(path, ec)) {
+                ImGui::AlignTextToFramePadding();
                 ImGui::TextDisabled("[missing] %s", display.c_str());
-                continue;
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", path.c_str());
+                ImGui::SameLine(ImGui::GetContentRegionMax().x - x_w);
+            } else {
+                ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0, 0.5f));
+                if (ImGui::Button(display.c_str(), ImVec2(-(x_w + gap), 0))) {
+                    // The path is already known, so load it directly rather
+                    // than re-asking for it through a file dialog. The main
+                    // loop picks this up and runs the same loader the dialog
+                    // uses.
+                    win.load_project_request = path;
+                }
+                ImGui::PopStyleVar();
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", path.c_str());
+                ImGui::SameLine(0, gap);
             }
-            ImGui::PushID(ri);  // unique ID per button
-            ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0, 0.5f));
-            if (ImGui::Button(display.c_str(), ImVec2(-1, 0))) {
-                // The path is already known, so load it directly rather than
-                // re-asking for it through a file dialog. The main loop picks
-                // this up and runs the same loader the dialog uses.
-                win.load_project_request = path;
-            }
-            ImGui::PopStyleVar();
+            if (ImGui::Button(ICON_FK_TIMES, ImVec2(x_w, 0)))
+                remove_row = ri;
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s", path.c_str());
+                ImGui::SetTooltip("Remove from this list (the project is not deleted)");
             ImGui::PopID();
+        }
+        if (remove_row >= 0) {
+            auto &list = ctx.user_settings.recent_projects;
+            list.erase(list.begin() + remove_row);
+            save_user_settings(ctx.user_settings);
         }
     }
 
