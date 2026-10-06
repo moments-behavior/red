@@ -114,7 +114,7 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
 
     ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0, 0.5f));
     if (ImGui::Button("Create Annotation Project", ImVec2(-1, 0))) {
-        win.annotation.open(false); // calibrated multi-camera 3D
+        win.annotation.open();
     }
     if (ImGui::Button("Load Annotation Project", ImVec2(-1, 0))) {
         // The same dialog File > Load Project uses. The old separate
@@ -128,12 +128,6 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
             "ChooseProject", "Load Annotation Project",
             "Red Project{.redproj}", cfg);
     }
-    if (ImGui::Button("Create 2D Annotation Project", ImVec2(-1, 0))) {
-        win.annotation.open(true); // single / uncalibrated camera(s), 2D only
-    }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Label 2D keypoints on one or more uncalibrated\n"
-                          "cameras. No calibration or triangulation.");
     ImGui::PopStyleVar();
 
     // Recent Projects section

@@ -47,21 +47,17 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         // used to be left at whatever the last creation put there, so making a
         // 2D project once meant every later "Create Project" quietly opened in
         // 2D mode too.
-        auto open_create = [&](bool two_d) { annot_state.open(two_d); };
+        auto open_create = [&]() { annot_state.open(); };
         // "Annotation" is kept rather than trimmed: it is the kind of project
         // this makes, and calibration projects are expected to come back as a
         // second kind. The welcome screen and the dialog title use the same
         // words.
         if (ImGui::MenuItem("Create Annotation Project"))
-            open_create(false);
+            open_create();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-            ImGui::SetTooltip("Calibrated multi-camera project with 3D "
-                              "triangulation.");
-        if (ImGui::MenuItem("Create 2D Annotation Project"))
-            open_create(true);
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-            ImGui::SetTooltip("Single or uncalibrated cameras. No calibration, "
-                              "no triangulation.");
+            ImGui::SetTooltip("One or more cameras; with several, choose "
+                              "calibrated (3D\ntriangulation) or not "
+                              "(2D labels only) in the form.");
         if (ImGui::MenuItem("Load Annotation Project")) {
             IGFD::FileDialogConfig config;
             config.countSelectionMax = 1;
@@ -235,7 +231,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
 
     // New Project
     if (ImGui::MenuItem(ICON_FK_FILE_O "##toolbar_new")) {
-        annot_state.open(false);
+        annot_state.open();
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         ImGui::SetTooltip("Create Project");

@@ -18,7 +18,9 @@ struct AnnotationDialogState {
     bool show = false;
     bool was_shown = false;   // edge-detect the frame the dialog opens on
     MediaKind media_kind = MediaKind::Video;
-    bool two_d_mode = false; // 2D-only project: no calibration, no triangulation
+    // Several cameras, not calibrated: 2D labels only. Chosen in the form
+    // ("Cameras: Calibrated / Not calibrated"); one camera is always 2D.
+    bool two_d_mode = false;
     std::string media_folder;
     std::vector<std::string> discovered_cameras;
     std::vector<bool> camera_selected;
@@ -30,9 +32,9 @@ struct AnnotationDialogState {
     // cleared nothing. Since the seed-from-open-media below only fires on an
     // empty folder, a leftover one made the field look filled with no cameras
     // under it, and re-picking that same folder was the only way back.
-    void open(bool two_d) {
+    void open() {
         show = true;
-        two_d_mode = two_d;
+        two_d_mode = false;   // several cameras default to calibrated
         media_folder.clear();
         discovered_cameras.clear();
         camera_selected.clear();
@@ -114,20 +116,22 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
 
     if (!state.show) return;
 
-    // Reflect the chosen mode onto the project every frame while shown. In 2D
-    // mode there is no calibration / camera model.
-    pm.annotation_2d = state.two_d_mode;
+    // Reflect the chosen mode onto the project every frame while shown. One
+    // camera cannot triangulate, so it is 2D whatever was chosen; several are
+    // 2D when marked not calibrated. 2D has no calibration / camera model.
+    int n_cams_selected = 0;
+    for (auto b : state.camera_selected) if (b) n_cams_selected++;
+    const bool project_2d = state.two_d_mode || n_cams_selected <= 1;
+    pm.annotation_2d = project_2d;
     pm.media_kind = media_kind_str(state.media_kind);
-    if (state.two_d_mode) {
+    if (project_2d) {
         pm.calibration_folder.clear();
         pm.telecentric = false;
     }
 
     ImGui::SetNextWindowSize(ImVec2(720, 460), ImGuiCond_FirstUseEver);
-    const char *dlg_title = state.two_d_mode
-                                ? "Create 2D Annotation Project"
-                                : "Create Annotation Project";
-    if (ImGui::Begin(dlg_title, &state.show, ImGuiWindowFlags_NoCollapse)) {
+    if (ImGui::Begin("Create Annotation Project", &state.show,
+                     ImGuiWindowFlags_NoCollapse)) {
 
         // error banner
         if (!state.status.empty()) {
@@ -348,11 +352,32 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
                     : (annot_skel_labels.empty() ? std::string()
                                                  : std::string(annot_skel_labels[annot_skeleton_idx]));
 
-            // ---- Camera Model + Calibration (multiple CALIBRATED cameras) ----
-            // Hidden in 2D mode: 2D projects are uncalibrated by definition.
+            // ---- Calibrated or not, then Camera Model + Calibration ----
+            // One form for both kinds: with several cameras the choice is
+            // here; one camera is 2D (it cannot triangulate) and says so.
             {
                 int n_sel = 0;
                 for (auto b : state.camera_selected) if (b) n_sel++;
+                if (n_sel > 1) {
+                    ImGui::TableNextRow();
+                    LabelCell("Cameras");
+                    ImGui::TableSetColumnIndex(1);
+                    if (ImGui::RadioButton("Calibrated: label in 2D, "
+                                           "triangulate to 3D",
+                                           !state.two_d_mode))
+                        state.two_d_mode = false;
+                    if (ImGui::RadioButton("Not calibrated: 2D labels only",
+                                           state.two_d_mode))
+                        state.two_d_mode = true;
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::Dummy(ImVec2(1, 1));
+                } else if (n_sel == 1) {
+                    ImGui::TableNextRow();
+                    LabelCell("Cameras");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextDisabled("One camera: a 2D project (no "
+                                        "triangulation)");
+                }
                 if (n_sel > 1 && !state.two_d_mode) {
                 // Camera Model selector
                 ImGui::TableNextRow();
