@@ -21,7 +21,7 @@
 
 struct BBoxToolState {
     bool show = false;
-    bool enabled = false; // master toggle for bbox drawing mode
+    bool enabled = true;  // Shift+drag draws boxes; on by default
 
     int current_class = 0;      // index into the project's class list
     bool show_ids = true;

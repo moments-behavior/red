@@ -108,7 +108,7 @@ struct WindowStates {
         group_export.finished.store(false);
         group_export.finished_status.reset();
         bbox.show = false;
-        bbox.enabled = false;
+        bbox.enabled = true;   // the default, as at startup
         bbox.drawing = false;
         bbox.drawing_cam = -1;
         bbox.editing_class = -1;
