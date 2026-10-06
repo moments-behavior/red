@@ -145,7 +145,8 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
         ImGui::SeparatorText("Playback");
         {
             // Speed is the transport bar's; every session starts at 1x.
-            ImGui::InputInt("Buffer Size", &s.default_buffer_size);
+            if (ImGui::InputInt("Buffer Size", &s.default_buffer_size))
+                other_changed = true;
             // No propagation needed — takes effect on next video load
         }
 
@@ -196,21 +197,29 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
 
         ImGui::Separator();
 
-        if (ImGui::Button("Save")) {
-            save_user_settings(s);
-        }
-        ImGui::SameLine();
+        // Back to the defaults for what this window shows -- not the things
+        // red remembers for you (recent projects, last folders, the Export
+        // window's values) nor the start folders chosen above.
         if (ImGui::Button("Reset to Defaults")) {
-            UserSettings defaults;
-            defaults.default_project_root_path = s.default_project_root_path;
-            defaults.default_media_root_path = s.default_media_root_path;
-            s = defaults;
+            const UserSettings d;
+            s.ui_text_scale = d.ui_text_scale;
+            ImGui::GetStyle().FontScaleMain = s.ui_text_scale;
+            s.default_pivot_midgray = d.default_pivot_midgray;
+            ctx.display.pivot_midgray = s.default_pivot_midgray;
+            s.keypoint_colormap = d.keypoint_colormap;
             g_keypoint_colormap = s.keypoint_colormap;
             apply_keypoint_colormap(ctx.skeleton, g_keypoint_colormap);
+            s.active_keypoint_color = d.active_keypoint_color;
+            s.default_buffer_size = d.default_buffer_size;
+            if (s.use_cpu_buffer != d.use_cpu_buffer && ctx.scene &&
+                d.use_cpu_buffer != ctx.scene->use_cpu_buffer)
+                ctx.popups.pushInfo("Restart Required",
+                    "Buffer Type changes take effect after restarting red.");
+            s.use_cpu_buffer = d.use_cpu_buffer;
             other_changed = true;
         }
-        // Propagate only the sections that actually changed (no auto-save;
-        // user presses "Save" explicitly to persist to disk)
+        // Every change is saved as it is made: no Save button.
+        if (other_changed) save_user_settings(s);
         },
         [&]() {
         // File dialog handlers
