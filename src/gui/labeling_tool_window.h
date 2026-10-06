@@ -220,8 +220,39 @@ inline void DrawLabelingToolWindow(
                                 state.focus_instance_edit = true;
                             }
                         }
-                        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
-                            ImGui::SetTooltip("#%d -- double-click to rename", id);
+                        // Where it stands: in the camera in focus, and over
+                        // all cameras when there are several.
+                        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+                            auto view_state = [&](int c) -> int {   // 0 none, 1 labelled, 2 absent
+                                if (!fa_i || c >= (int)fa_i->cameras.size()) return 0;
+                                const auto &cam = fa_i->cameras[(size_t)c];
+                                if (cam.is_absent()) return 2;
+                                if (cam.has_bbox()) return 1;
+                                for (const auto &kp : cam.keypoints)
+                                    if (keypoint2d_assessed(kp)) return 1;
+                                return 0;
+                            };
+                            static const char *kStates[] = {"not labelled yet", "labelled",
+                                                            "absent"};
+                            std::string tip = info.instance_name(id);
+                            if (tip != "#" + std::to_string(id))
+                                tip += " (#" + std::to_string(id) + ")";
+                            const std::string cam_name =
+                                focus_cam < (int)pm.camera_names.size()
+                                    ? pm.camera_names[(size_t)focus_cam] : "this camera";
+                            tip += "\n" + cam_name + ": " + kStates[view_state(focus_cam)];
+                            const int nc = (int)pm.camera_names.size();
+                            if (nc > 1) {
+                                int count[3] = {0, 0, 0};
+                                for (int c = 0; c < nc; ++c) count[view_state(c)]++;
+                                tip += "\nAll " + std::to_string(nc) + " cameras: " +
+                                       std::to_string(count[1]) + " labelled, " +
+                                       std::to_string(count[2]) + " absent, " +
+                                       std::to_string(count[0]) + " not yet";
+                            }
+                            tip += "\nDouble-click to rename";
+                            ImGui::SetTooltip("%s", tip.c_str());
+                        }
                     }
                     ImGui::PopID();
                 }
