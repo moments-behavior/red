@@ -5,7 +5,7 @@ temporal tracker ported from `pose_proofread_client`).
 
 tracktail takes the 3D pose on one frame and tracks it forward through the
 next frames across all cameras at once. In red it lives in
-**Tools → tracktail** and works on whatever is labeled on the current
+**Tailcycle → tracktail** and works on whatever is labeled on the current
 frame — no JARVIS, no prediction store, no separate detector.
 
 ## Workflow
@@ -16,7 +16,7 @@ frame — no JARVIS, no prediction store, no separate detector.
    the Labeling Tool (the panel shows `animal i/n (id k)`).
 3. Press **T** to triangulate, or leave *Triangulate 2D labels first if there
    is no 3D* ticked and the panel does it for you.
-4. **Tools → tracktail**, set the server URL, click **tracktail Forward**.
+4. **Tailcycle → tracktail**, set the server URL, click **tracktail Forward**.
    Tick **Predict backwards** to track into the frames before the current one
    instead.
 5. Step forward (or back): frames `current+1 … current+N` (or

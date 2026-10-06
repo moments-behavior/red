@@ -147,7 +147,7 @@ red prints which backend it chose at startup.
 
 ### tracktail (this branch)
 
-`multianimal_posetail` adds **Tools → tracktail**: label one frame,
+`multianimal_posetail` adds **Tailcycle → tracktail**: label one frame,
 triangulate, and tracktail predicts the next frames for that animal across
 all cameras (3D + reprojected 2D, marked *Predicted*). Inference runs on
 the tracktail HTTP server (`server/server.py` in
