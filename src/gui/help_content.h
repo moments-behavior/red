@@ -115,7 +115,6 @@ inline const std::vector<Group> &shortcut_groups() {
             {S::COUNT, "Shift + drag", "Draw a box of the selected class on the instance being edited: press with Shift held, drag, let go (Esc cancels)"},
             {S::COUNT, "R", "Delete the hovered box on this camera (a hovered keypoint takes R first)"},
             {S::COUNT, "F", "Delete the hovered instance's box on all cameras (a hovered keypoint takes F first)"},
-            {S::COUNT, "Z  /  X", "Previous / next class (saved with the labels; YOLO export uses them)"},
         }},
         {"OBB tool", "When the OBB tool is enabled", Gate::ToolObb, {
             {S::COUNT, "G  (\xC3\x97""3)", "Place axis point 1, axis point 2, then the corner"},

@@ -295,13 +295,6 @@ inline void bbox_handle_input(BBoxToolState &state,
             state.hovered = false;
         }
     }
-
-    // Z/X: previous / next class.
-    const int n = (int)classes.names.size();
-    if (n > 0 && box_key(ImGuiKey_Z))
-        state.current_class = (state.current_class - 1 + n) % n;
-    if (n > 0 && box_key(ImGuiKey_X))
-        state.current_class = (state.current_class + 1) % n;
 }
 
 // Settings panel for the bbox tool
@@ -318,7 +311,6 @@ inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
                            "Esc cancels.");
         ImGui::TextWrapped("R: delete the hovered box (this camera)");
         ImGui::TextWrapped("F: delete the hovered instance's box (all cameras)");
-        ImGui::TextWrapped("Z/X: previous / next class");
 
         // Class list: saved with the labels.
         ImGui::SeparatorText("Classes");
