@@ -235,6 +235,7 @@ inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
             double img_angle = -angle;
 
             // Store in AnnotationMap
+            if (bbox_state.class_names.empty()) bbox_state.add_class();
             auto &fa = get_or_create_frame(amap, frame, num_nodes, num_cameras);
             fa.category_id  = bbox_state.current_class;
             fa.instance_id  = bbox_state.current_instance;

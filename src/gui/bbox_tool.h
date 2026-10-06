@@ -20,8 +20,9 @@ struct BBoxToolState {
     bool enabled = false; // master toggle for bbox drawing mode
 
     // Class and instance tracking
-    std::vector<std::string> class_names = {"animal"};
-    std::vector<ImVec4> class_colors = {ImVec4(0.3f, 1.0f, 1.0f, 1.0f)};
+    // Empty until the first box (or + Add Class / N) makes Class_1.
+    std::vector<std::string> class_names;
+    std::vector<ImVec4> class_colors;
     int current_class = 0;
     int current_instance = 0;
     bool show_ids = true;
@@ -40,6 +41,20 @@ struct BBoxToolState {
         hue -= std::floor(hue);
         return (ImVec4)ImColor::HSV(hue, 0.85f, 0.95f);
     }
+
+    // Adds Class_<n+1> and makes it current.
+    void add_class() {
+        const int n = (int)class_names.size();
+        class_names.push_back("Class_" + std::to_string(n + 1));
+        class_colors.push_back(next_class_color());
+        current_class = n;
+        current_instance = 0;
+    }
+    ImVec4 current_color() const {
+        return current_class >= 0 && current_class < (int)class_colors.size()
+                   ? class_colors[current_class]
+                   : ImVec4(0.3f, 1.0f, 1.0f, 1.0f);
+    }
 };
 
 // Draw bbox rectangles on a camera's ImPlot view
@@ -50,7 +65,7 @@ inline void bbox_draw_overlays(BBoxToolState &state, const AnnotationMap &amap,
         ImPlotPoint mouse = ImPlot::GetPlotMousePos();
         double dxs[] = {state.start_x, mouse.x, mouse.x, state.start_x, state.start_x};
         double dys[] = {state.start_y, state.start_y, mouse.y, mouse.y, state.start_y};
-        ImVec4 c = state.class_colors[state.current_class];
+        ImVec4 c = state.current_color();
         ImPlotSpec nspec;
         nspec.LineColor = c;
         ImPlot::PlotLine("##bbox_new", dxs, dys, 5, nspec);
@@ -128,6 +143,8 @@ inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap,
     // Shift + press starts a box at the cursor ...
     if (!state.drawing && ImGui::GetIO().KeyShift &&
         ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        // The first box needs a class to belong to.
+        if (state.class_names.empty()) state.add_class();
         state.drawing = true;
         state.drawing_cam = cam_idx;
         state.start_x = mx;
@@ -223,22 +240,19 @@ inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap,
     }
 
     // Z/X: switch class
-    if (ImGui::IsKeyPressed(ImGuiKey_Z)) {
+    const bool have_classes = !state.class_names.empty();
+    if (have_classes && ImGui::IsKeyPressed(ImGuiKey_Z)) {
         state.current_class = (state.current_class - 1 + (int)state.class_names.size())
                               % (int)state.class_names.size();
         state.current_instance = 0;
     }
-    if (ImGui::IsKeyPressed(ImGuiKey_X)) {
+    if (have_classes && ImGui::IsKeyPressed(ImGuiKey_X)) {
         state.current_class = (state.current_class + 1) % (int)state.class_names.size();
         state.current_instance = 0;
     }
     // N key: create new class
     if (ImGui::IsKeyPressed(ImGuiKey_N)) {
-        int n = (int)state.class_names.size();
-        state.class_names.push_back("Class_" + std::to_string(n + 1));
-        state.class_colors.push_back(state.next_class_color());
-        state.current_class = n;
-        state.current_instance = 0;
+        state.add_class();
     }
     // C/V: switch instance ID
     if (ImGui::IsKeyPressed(ImGuiKey_C) && state.current_instance > 0)
@@ -255,9 +269,12 @@ inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
         ImGui::Checkbox("Show IDs", &state.show_ids);
 
         ImGui::Separator();
-        ImGui::Text("Class: %s (%d)",
-                    state.class_names[state.current_class].c_str(),
-                    state.current_class);
+        if (state.class_names.empty())
+            ImGui::TextDisabled("Class: none yet -- the first box adds Class_1");
+        else
+            ImGui::Text("Class: %s (%d)",
+                        state.class_names[state.current_class].c_str(),
+                        state.current_class);
         ImGui::Text("Instance: %d", state.current_instance);
 
         ImGui::Separator();
@@ -277,11 +294,7 @@ inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
             if (ImGui::Selectable(state.class_names[i].c_str(), sel))
                 state.current_class = i;
         }
-        if (ImGui::Button("+ Add Class")) {
-            int n = (int)state.class_names.size();
-            state.class_names.push_back("Class_" + std::to_string(n + 1));
-            state.class_colors.push_back(state.next_class_color());
-        }
+        if (ImGui::Button("+ Add Class")) state.add_class();
         },
         nullptr, ImVec2(300, 350));
 }
