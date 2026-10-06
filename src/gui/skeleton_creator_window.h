@@ -526,6 +526,9 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
                     f << skeleton_creator_to_json(st).dump(4);
                     st.status = "Saved " + path;
                     ctx.toasts.pushSuccess("Saved skeleton " + st.name);
+                    // A form that opened the creator takes this one up.
+                    ctx.skeleton_saved_path = path;
+                    ++ctx.skeleton_saved_serial;
                 } else {
                     st.status = "Could not write " + path;
                     ctx.popups.pushError(st.status);

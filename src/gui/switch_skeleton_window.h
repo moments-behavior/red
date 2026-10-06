@@ -29,6 +29,7 @@ struct SwitchSkeletonState {
     int   preset_idx = 0;
 
     std::string status;         // result/error message shown after Apply
+    int skeleton_wait = -1;     // waiting on the Skeleton Creator (see "New...")
 };
 
 // Applies a staged skeleton selection to an already-open project: reloads
@@ -125,11 +126,25 @@ inline void DrawSwitchSkeletonWindow(SwitchSkeletonState &st, AppContext &ctx) {
                 if (st.skeleton_name == labels_s[i]) { st.preset_idx = i; break; }
         }
 
+        // A skeleton saved in the creator after "New..." becomes the choice.
+        if (std::string saved = skeleton_saved_since(ctx, st.skeleton_wait);
+            !saved.empty()) {
+            st.load_from_json = true;
+            st.skeleton_file = saved;
+            st.skeleton_wait = -1;
+        }
+
         int mode = st.load_from_json ? 0 : 1;
         ImGui::SetNextItemWidth(120);
         if (ImGui::Combo("Mode##switch_skel_mode", &mode, "File\0Preset\0")) {
             st.load_from_json = (mode == 0);
         }
+        ImGui::SameLine();
+        if (ImGui::Button("New...##switch_skel_new"))
+            st.skeleton_wait = open_skeleton_creator_for(ctx);
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("Draw a new skeleton in the Skeleton Creator; "
+                              "saving it there picks it here.");
 
         if (st.load_from_json) {
             float avail = ImGui::GetContentRegionAvail().x;

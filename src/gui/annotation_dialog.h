@@ -17,6 +17,7 @@
 
 struct AnnotationDialogState {
     bool show = false;
+    int skeleton_wait = -1;   // waiting on the Skeleton Creator (see "New...")
     bool was_shown = false;   // edge-detect the frame the dialog opens on
     MediaKind media_kind = MediaKind::Video;
     // Several cameras, not calibrated: 2D labels only. Chosen in the form
@@ -263,20 +264,31 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
             }
 
             // ---- Skeleton ----
+            // A skeleton saved in the creator after "New..." becomes this one.
+            if (std::string saved = skeleton_saved_since(ctx, state.skeleton_wait);
+                !saved.empty()) {
+                pm.load_skeleton_from_json = true;
+                pm.skeleton_file = saved;
+                state.skeleton_wait = -1;
+            }
             int skel_mode = pm.load_skeleton_from_json ? 0 : 1;
 
             ImGui::TableNextRow();
             LabelCell("Skeleton");
             ImGui::TableSetColumnIndex(1);
             {
+                const char *ntxt = "New...##annot_skel_new";
+                const float gap = ImGui::GetStyle().ItemInnerSpacing.x;
+                const float new_w = ImGui::CalcTextSize("New...").x +
+                                    ImGui::GetStyle().FramePadding.x * 2.0f;
                 if (pm.load_skeleton_from_json) {
                     float avail = ImGui::GetContentRegionAvail().x;
                     const char *btxt = "Browse##annot_skel";
-                    float browse_w = ImGui::CalcTextSize(btxt).x +
+                    float browse_w = ImGui::CalcTextSize("Browse").x +
                                      ImGui::GetStyle().FramePadding.x * 2.0f;
-                    float gap = ImGui::GetStyle().ItemInnerSpacing.x;
                     ImGui::PushID("annot_skelfile");
-                    ImGui::SetNextItemWidth(ImMax(50.0f, avail - browse_w - gap));
+                    ImGui::SetNextItemWidth(
+                        ImMax(50.0f, avail - browse_w - new_w - 2 * gap));
                     ImGui::InputText("##path", &pm.skeleton_file);
                     ImGui::SameLine(0.0f, gap);
                     if (ImGui::Button(btxt)) {
@@ -290,11 +302,19 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
                     ImGui::PopID();
                 } else {
                     ImGui::BeginDisabled(annot_skel_labels.empty());
-                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    ImGui::SetNextItemWidth(
+                        ImMax(50.0f, ImGui::GetContentRegionAvail().x - new_w - gap));
                     ImGui::Combo("##annot_skeleton_preset", &annot_skeleton_idx,
                                  annot_skel_labels.data(), (int)annot_skel_labels.size());
                     ImGui::EndDisabled();
                 }
+                // Draw a new one; saving it there picks it here.
+                ImGui::SameLine(0.0f, gap);
+                if (ImGui::Button(ntxt))
+                    state.skeleton_wait = open_skeleton_creator_for(ctx);
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                    ImGui::SetTooltip("Draw a new skeleton in the Skeleton Creator; "
+                                      "saving it there picks it here.");
             }
             ImGui::TableSetColumnIndex(2);
             ImGui::SetNextItemWidth(90.0f);

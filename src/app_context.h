@@ -99,7 +99,27 @@ struct AppContext {
     bool unsaved_prompt = false;             // open that prompt next frame
     std::function<void()> after_save_action; // run once Save Project has saved
     bool save_project_prompt = false;        // open Save Project next frame
+
+    // Skeleton Creator, reached from the forms that pick a skeleton: a request
+    // to open it, and each skeleton it saves (the serial counts saves, so a
+    // form waiting on one can tell a new save from an old).
+    bool open_skeleton_creator = false;
+    std::string skeleton_saved_path;
+    int skeleton_saved_serial = 0;
 };
+
+// A skeleton picker's "New..." button: opens the Skeleton Creator and returns
+// the save count to wait past (see skeleton_saved_since).
+inline int open_skeleton_creator_for(AppContext &ctx) {
+    ctx.open_skeleton_creator = true;
+    return ctx.skeleton_saved_serial;
+}
+// The skeleton saved in the creator since `since` (a value from
+// open_skeleton_creator_for; < 0 = not waiting), or "".
+inline std::string skeleton_saved_since(const AppContext &ctx, int since) {
+    return since >= 0 && ctx.skeleton_saved_serial > since ? ctx.skeleton_saved_path
+                                                           : std::string();
+}
 
 // --- Free functions replacing lambdas that captured main() locals ---
 

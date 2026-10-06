@@ -881,6 +881,13 @@ int main(int argc, char **argv) {
 
 
         // Handle main menu file dialogs
+        // A skeleton picker's "New..." asked for the Skeleton Creator.
+        if (ctx.open_skeleton_creator) {
+            ctx.open_skeleton_creator = false;
+            win.skeleton_creator.show = true;
+            ImGui::SetWindowFocus("Skeleton Creator");
+        }
+
         HandleMainMenuDialogs(ctx, win, media_root_dir,
                               print_metadata, print_summary,
                               [&]() {});
