@@ -1679,6 +1679,7 @@ int main(int argc, char **argv) {
                             }
                             ImGui::SeparatorText("Visibility");
                             ImGui::Checkbox("Keypoints", &display.show_keypoints);
+                            ImGui::Checkbox("Keypoint names", &display.show_keypoint_names);
                             ImGui::Checkbox("Bounding Boxes", &display.show_bboxes);
                             ImGui::SeparatorText("Keypoint Colours");
                             using KC = DisplayState::KeypointColoring;
