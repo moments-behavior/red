@@ -102,15 +102,15 @@ inline void DrawLabelingToolWindow(
 
         // ─── Instances in this frame ───
         // "Instance" rather than "animal": the objects need not be animals.
-        // Only shown once a frame holds more than one, so a single-instance
-        // project sees nothing new. The selector picks which instance placing,
+        // Shown for one instance too, so it can be named and coloured. The
+        // selector picks which instance placing,
         // dragging and triangulating apply to; the others draw dimmed.
         {
             auto fit = annotations.find((u32)current_frame_num);
             const int n = fit == annotations.end() ? 0 : (int)fit->second.size();
             if (ctx.active_instance >= n) ctx.active_instance = 0;
 
-            if (n > 1) {
+            if (n >= 1) {
                 // One row per instance: click to edit it, double-click the
                 // name to rename it, double-click the colour to pick one.
                 // Names and colours are kept by id (saved with the labels).
@@ -181,7 +181,7 @@ inline void DrawLabelingToolWindow(
             }
 
             if (fit != annotations.end() && skeleton.has_skeleton) {
-                if (n > 1) ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 2);
+                if (n >= 1) ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 2);
                 if (ImGui::SmallButton(ICON_FK_PLUS " Instance")) {
                     // A new instance gets the next unused id, so ids stay
                     // stable even after one is removed.
