@@ -1587,29 +1587,30 @@ int main(int argc, char **argv) {
                             int nc = (int)scene->num_cams;
 
                             // Bbox tool. Boxes go on the instance being
-                            // edited.
+                            // edited, which takes the selected class.
+                            auto &box_classes = pm.annotation_config.class_names;
                             if (win.bbox.enabled) {
-                                bbox_handle_input(win.bbox,
+                                bbox_handle_input(win.bbox, box_classes,
                                                   annotations, frame, j,
                                                   active_instance, nn, nc,
                                                   iw, ih);
                                 bbox_draw_cursor(win.bbox, j);
                             }
                             if (display.show_bboxes) {
-                                bbox_draw_overlays(win.bbox,
+                                bbox_draw_overlays(win.bbox, box_classes,
                                                    annotations, frame, j,
                                                    iw, ih);
                             }
 
                             // OBB tool
                             if (win.obb.enabled) {
-                                obb_handle_input(win.obb,
+                                obb_handle_input(win.obb, win.bbox, box_classes,
                                                  annotations, frame, j,
                                                  active_instance, nn, nc,
                                                  iw, ih);
                             }
                             if (display.show_bboxes) {
-                                obb_draw_overlays(win.obb, win.bbox,
+                                obb_draw_overlays(win.obb, win.bbox, box_classes,
                                                   annotations, frame, j, iw, ih);
                             }
 

@@ -3,7 +3,7 @@
 //
 // 3-click construction: axis point 1, axis point 2, perpendicular corner.
 // OBBs are stored in AnnotationMap CameraAnnotation extras (cx, cy, w, h, angle).
-// An OBB goes on the instance being edited, like a box (bbox_tool.h).
+// Same classes as bbox_tool.h; an OBB goes where a box would (box_target).
 
 #include "imgui.h"
 #include "implot.h"
@@ -103,6 +103,7 @@ inline bool obb_contains(double cx, double cy, double w, double h,
 
 // Draw OBB overlays on a camera's ImPlot view: every animal's.
 inline void obb_draw_overlays(OBBToolState &state, const BBoxToolState &bbox_state,
+                               const std::vector<std::string> &classes,
                                const AnnotationMap &amap, u32 frame,
                                int cam_idx, int img_w, int img_h) {
     (void)img_w;
@@ -119,7 +120,8 @@ inline void obb_draw_overlays(OBBToolState &state, const BBoxToolState &bbox_sta
             double plot_cy = img_h - cam.extras->obb_cy;
             double angle = -cam.extras->obb_angle; // flip angle for Y inversion
 
-            ImVec4 color = box_color();
+            int ci = fa.category_id;
+            ImVec4 color = box_class_color(ci);
             if (!state.hovered || cam_idx != state.hovered_cam ||
                 (int)inst != state.hovered_instance)
                 color.w *= 0.6f;
@@ -134,8 +136,9 @@ inline void obb_draw_overlays(OBBToolState &state, const BBoxToolState &bbox_sta
             ImGui::PopID();
 
             if (bbox_state.show_ids) {
-                char label[32];
-                snprintf(label, sizeof(label), "#%d (OBB)", fa.instance_id);
+                char label[96];
+                snprintf(label, sizeof(label), "%s #%d (OBB)",
+                         box_class_name(classes, ci), fa.instance_id);
                 ImPlot::PlotText(label, plot_cx, plot_cy);
             }
         }
@@ -192,7 +195,9 @@ inline void obb_draw_overlays(OBBToolState &state, const BBoxToolState &bbox_sta
 }
 
 // Handle OBB input on a focused camera view
-inline void obb_handle_input(OBBToolState &state, AnnotationMap &amap, u32 frame, int cam_idx,
+inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
+                              std::vector<std::string> &classes,
+                              AnnotationMap &amap, u32 frame, int cam_idx,
                               int active_instance, int num_nodes, int num_cameras,
                               int img_w, int img_h) {
     if (!state.enabled) return;
@@ -230,8 +235,10 @@ inline void obb_handle_input(OBBToolState &state, AnnotationMap &amap, u32 frame
             double img_angle = -angle;
 
             // Store on the animal being edited
+            const int cat = box_class_for_new(bbox_state, classes);
             auto &fa = box_target(amap, frame, active_instance, num_nodes,
                                   num_cameras);
+            fa.category_id = cat;
 
             if (cam_idx < (int)fa.cameras.size()) {
                 auto &ext = fa.cameras[cam_idx].get_extras();

@@ -434,6 +434,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     ecfg.output_folder      = state.output_dir;
                     ecfg.camera_names       = pm.camera_names;
                     ecfg.skeleton_name      = skeleton.name;
+                    ecfg.class_names        = ctx.pm.annotation_config.class_names;
                     ecfg.num_keypoints      = skeleton.num_nodes;
                     ecfg.bbox_margin        = state.margin;
                     ecfg.train_ratio        = state.train_ratio;

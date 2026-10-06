@@ -70,6 +70,9 @@ struct ExportConfig {
     // Project info
     std::vector<std::string> camera_names;
     std::string skeleton_name;
+    // Box classes by number (the Bbox tool's, saved with the labels). Empty:
+    // one class, named after the skeleton.
+    std::vector<std::string> class_names;
     std::vector<std::string> node_names;
     std::vector<std::pair<int, int>> edges;
     int num_keypoints = 0;
@@ -390,7 +393,15 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
                         bool include_keypoints, std::string *status,
                         std::atomic<int> *img_counter = nullptr) {
     namespace fs = std::filesystem;
-    auto labeled = get_keypoint_frames(amap);
+    // Frames with keypoints or a box: a detection set can be boxes alone.
+    std::vector<u32> labeled;
+    for (const auto &[f, fis] : amap) {
+        bool any = any_instance_has_keypoints(fis);
+        for (const auto &fa : fis)
+            for (const auto &cam : fa.cameras)
+                any = any || cam.has_bbox();
+        if (any) labeled.push_back(f);
+    }
     if (labeled.empty()) {
         if (status) *status = "Error: No labeled frames found.";
         return false;
@@ -418,60 +429,62 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
                 auto it = amap.find(frame);
                 if (it == amap.end()) continue;
                 if (it->second.empty()) continue;
-                const auto &fa = it->second.front();
-
-                if (ci >= (int)fa.cameras.size()) continue;
-                const auto &c2d = fa.cameras[ci];
 
                 std::string fname = "Frame_" + std::to_string(frame);
                 std::ofstream lbl(lbl_dir + "/" + fname + ".txt");
 
-                // Compute bbox (normalized)
-                double bx, by, bw, bh;
-                if (c2d.has_bbox()) {
-                    bx = c2d.extras->bbox_x; by = c2d.extras->bbox_y;
-                    bw = c2d.extras->bbox_w; bh = c2d.extras->bbox_h;
-                } else {
-                    // Derive from keypoints
-                    double xmin = 1e9, xmax = -1e9, ymin = 1e9, ymax = -1e9;
-                    bool any = false;
-                    for (size_t k = 0; k < c2d.keypoints.size(); ++k) {
-                        if (!c2d.keypoints[k].usable()) continue;
-                        double x = c2d.keypoints[k].x;
-                        double y = h - c2d.keypoints[k].y; // Y-flip
-                        xmin = std::min(xmin, x); xmax = std::max(xmax, x);
-                        ymin = std::min(ymin, y); ymax = std::max(ymax, y);
-                        any = true;
+                // One line per instance: every object in the image.
+                for (const auto &fa : it->second) {
+                    if (ci >= (int)fa.cameras.size()) continue;
+                    const auto &c2d = fa.cameras[ci];
+
+                    // Compute bbox (normalized)
+                    double bx, by, bw, bh;
+                    if (c2d.has_bbox()) {
+                        bx = c2d.extras->bbox_x; by = c2d.extras->bbox_y;
+                        bw = c2d.extras->bbox_w; bh = c2d.extras->bbox_h;
+                    } else {
+                        // Derive from keypoints
+                        double xmin = 1e9, xmax = -1e9, ymin = 1e9, ymax = -1e9;
+                        bool any = false;
+                        for (size_t k = 0; k < c2d.keypoints.size(); ++k) {
+                            if (!c2d.keypoints[k].usable()) continue;
+                            double x = c2d.keypoints[k].x;
+                            double y = h - c2d.keypoints[k].y; // Y-flip
+                            xmin = std::min(xmin, x); xmax = std::max(xmax, x);
+                            ymin = std::min(ymin, y); ymax = std::max(ymax, y);
+                            any = true;
+                        }
+                        if (!any) continue;
+                        bx = std::max(xmin - cfg.bbox_margin, 0.0);
+                        by = std::max(ymin - cfg.bbox_margin, 0.0);
+                        bw = std::min(xmax + cfg.bbox_margin, (double)w) - bx;
+                        bh = std::min(ymax + cfg.bbox_margin, (double)h) - by;
                     }
-                    if (!any) continue;
-                    bx = std::max(xmin - cfg.bbox_margin, 0.0);
-                    by = std::max(ymin - cfg.bbox_margin, 0.0);
-                    bw = std::min(xmax + cfg.bbox_margin, (double)w) - bx;
-                    bh = std::min(ymax + cfg.bbox_margin, (double)h) - by;
-                }
 
-                // YOLO format: cx cy w h (all normalized 0-1)
-                double cx = (bx + bw / 2.0) / w;
-                double cy = (by + bh / 2.0) / h;
-                double nw = bw / w;
-                double nh = bh / h;
+                    // YOLO format: cx cy w h (all normalized 0-1)
+                    double cx = (bx + bw / 2.0) / w;
+                    double cy = (by + bh / 2.0) / h;
+                    double nw = bw / w;
+                    double nh = bh / h;
 
-                lbl << fa.category_id << " "
-                    << std::fixed << std::setprecision(6)
-                    << cx << " " << cy << " " << nw << " " << nh;
+                    lbl << fa.category_id << " "
+                        << std::fixed << std::setprecision(6)
+                        << cx << " " << cy << " " << nw << " " << nh;
 
-                if (include_keypoints) {
-                    for (size_t k = 0; k < c2d.keypoints.size(); ++k) {
-                        if (c2d.keypoints[k].usable()) {
-                            double kx = c2d.keypoints[k].x / w;
-                            double ky = (h - c2d.keypoints[k].y) / h; // Y-flip
-                            lbl << " " << kx << " " << ky << " 2";
-                        } else {
-                            lbl << " 0 0 0";
+                    if (include_keypoints) {
+                        for (size_t k = 0; k < c2d.keypoints.size(); ++k) {
+                            if (c2d.keypoints[k].usable()) {
+                                double kx = c2d.keypoints[k].x / w;
+                                double ky = (h - c2d.keypoints[k].y) / h; // Y-flip
+                                lbl << " " << kx << " " << ky << " 2";
+                            } else {
+                                lbl << " 0 0 0";
+                            }
                         }
                     }
-                }
-                lbl << "\n";
+                    lbl << "\n";
+                } // instances
             }
         }
     };
@@ -485,8 +498,23 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
         f << "path: " << cfg.output_folder << "\n";
         f << "train: images/train\n";
         f << "val: images/val\n";
-        f << "nc: " << 1 << "\n"; // TODO: multi-class from AnnotationConfig
-        f << "names: ['" << cfg.skeleton_name << "']\n";
+        // One name per class number the labels use: the Bbox tool's classes,
+        // or the skeleton's name for a project without any.
+        std::vector<std::string> names = cfg.class_names;
+        if (names.empty()) names.push_back(cfg.skeleton_name);
+        for (const auto &[fnum, fis] : amap)
+            for (const auto &fa : fis)
+                while (fa.category_id >= (int)names.size())
+                    names.push_back("class_" + std::to_string(names.size()));
+        f << "nc: " << names.size() << "\n";
+        f << "names: [";
+        for (size_t i = 0; i < names.size(); ++i) {
+            std::string n = names[i];
+            for (size_t p = 0; (p = n.find('\'', p)) != std::string::npos; p += 2)
+                n.insert(p, 1, '\'');   // YAML single-quote escape
+            f << (i ? ", " : "") << "'" << n << "'";
+        }
+        f << "]\n";
         if (include_keypoints) {
             f << "kpt_shape: [" << cfg.num_keypoints << ", 3]\n";
         }

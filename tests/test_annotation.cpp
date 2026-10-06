@@ -692,8 +692,34 @@ static void test_obb_contains_rotated() {
 // bbox_tool.h: Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
+static void test_bbox_next_class_color() {
+    printf("  test_bbox_next_class_color...\n");
+
+    // Colours are valid and differ from class to class.
+    for (int i = 0; i < 6; ++i) {
+        const ImVec4 c = box_class_color(i);
+        EXPECT_TRUE(c.x >= 0 && c.x <= 1 && c.y >= 0 && c.y <= 1 &&
+                    c.z >= 0 && c.z <= 1 && c.w >= 0 && c.w <= 1);
+        if (i > 0) {
+            const ImVec4 p = box_class_color(i - 1);
+            EXPECT_TRUE(fabs(c.x - p.x) > 0.01 || fabs(c.y - p.y) > 0.01 ||
+                        fabs(c.z - p.z) > 0.01);
+        }
+    }
+}
+
 static void test_bbox_classes_and_target() {
     printf("  test_bbox_classes_and_target...\n");
+
+    // The first box of a project with no classes makes Class_0.
+    BBoxToolState state;
+    std::vector<std::string> classes;
+    EXPECT_EQ(box_class_for_new(state, classes), 0);
+    EXPECT_EQ((int)classes.size(), 1);
+    EXPECT_TRUE(classes[0] == "Class_0");
+    add_box_class(state, classes);
+    EXPECT_TRUE(classes[1] == "Class_1");
+    EXPECT_EQ(state.current_class, 1);
 
     // A box goes on the instance being edited, not the frame's first.
     AnnotationMap amap;
@@ -2288,6 +2314,46 @@ static void test_csv_class_and_instance() {
     fs::remove_all(root);
 }
 
+// Boxes with classes: every instance becomes a line with its class, frames
+// with boxes and no keypoints are exported, and data.yaml names the classes.
+static void test_export_yolo_box_classes() {
+    printf("  test_export_yolo_box_classes...\n");
+    namespace fs = std::filesystem;
+
+    ExportTestFixture fix;
+    fix.amap.clear();
+    // Frame 200: two instances, classes 0 and 1, boxes only.
+    get_or_create_frame(fix.amap, 200, 3, 2, 0);
+    get_or_create_frame(fix.amap, 200, 3, 2, 1);
+    for (int i = 0; i < 2; ++i) {
+        auto &fa = *find_instance(fix.amap[200], i);
+        fa.category_id = i;
+        auto &e = fa.cameras[0].get_extras();
+        e.bbox_x = 10 + 100 * i; e.bbox_y = 20; e.bbox_w = 50; e.bbox_h = 40;
+        e.has_bbox = true;
+    }
+    fix.cfg.class_names = {"rat", "mouse"};
+    fix.cfg.train_ratio = 1.0f;
+    std::string status;
+    EXPECT_TRUE(ExportFormats::export_yolo(fix.cfg, fix.amap, false, &status));
+
+    std::ifstream y(fix.output_dir + "/data.yaml");
+    std::string yaml((std::istreambuf_iterator<char>(y)), std::istreambuf_iterator<char>());
+    EXPECT_TRUE(yaml.find("nc: 2") != std::string::npos);
+    EXPECT_TRUE(yaml.find("names: ['rat', 'mouse']") != std::string::npos);
+
+    std::vector<int> classes;
+    for (const char *split : {"train", "val"}) {
+        const fs::path p = fs::path(fix.output_dir) / "labels" / split / "cam0" / "Frame_200.txt";
+        if (!fs::exists(p)) continue;
+        std::ifstream f(p);
+        std::string line;
+        while (std::getline(f, line)) classes.push_back(std::stoi(line));
+    }
+    EXPECT_EQ((int)classes.size(), 2);
+    EXPECT_TRUE(classes.size() == 2 && classes[0] == 0 && classes[1] == 1);
+}
+
 int main() {
     printf("=== Annotation System Tests ===\n");
 
@@ -2333,6 +2399,7 @@ int main() {
     printf("\n--- SAM Inference ---\n");
 
     printf("\n--- Bbox Tool ---\n");
+    test_bbox_next_class_color();
     test_bbox_classes_and_target();
     test_annotations_json_class_names();
     test_csv_class_and_instance();
@@ -2349,6 +2416,7 @@ int main() {
     printf("\n--- Export Pipeline: YOLO ---\n");
     test_export_yolo_pose_full_pipeline();
     test_export_yolo_detect_no_keypoints();
+    test_export_yolo_box_classes();
 
     printf("\n--- Export Pipeline: DeepLabCut ---\n");
     test_export_deeplabcut_full_pipeline();
