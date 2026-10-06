@@ -727,9 +727,12 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                         "cannot paste",
                         Toast::Warning, 5.0f);
                 } else {
-                    FrameAnnotation &fa = get_or_create_frame(
-                        annotations, (u32)current_frame_num,
-                        skeleton.num_nodes, scene->num_cams);
+                    // Onto the instance being edited, on a frame started with
+                    // the nearest labelled frame's instances.
+                    FrameAnnotation &fa = instance_or_first(
+                        create_frame_instances(annotations, (u32)current_frame_num,
+                                               skeleton.num_nodes, scene->num_cams),
+                        ctx.active_instance);
                     int n = paste_keypoints(kc, fa, skeleton.num_nodes,
                                             scene->num_cams);
                     ctx.toasts.pushSuccess(

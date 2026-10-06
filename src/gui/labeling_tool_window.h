@@ -316,20 +316,23 @@ inline void DrawLabelingToolWindow(
 
         ImGui::BeginDisabled(!has_prev);
         if (ImGui::Button("Copy Prev")) {
-            // Copy annotations from prev frame into current frame
-            const auto &prev_fa = annotations.at(prev_frame).front();
-            FrameAnnotation new_fa = make_frame(skeleton.num_nodes, scene->num_cams, current_frame_num);
-            // Copy keypoints from prev frame
-            for (int c = 0; c < scene->num_cams && c < (int)prev_fa.cameras.size(); ++c) {
-                for (int k = 0; k < skeleton.num_nodes && k < (int)prev_fa.cameras[c].keypoints.size(); ++k) {
-                    new_fa.cameras[c].keypoints[k] = prev_fa.cameras[c].keypoints[k];
+            // Copy the previous labelled frame's keypoints and 3D into this
+            // one -- every instance, with its id and class, not just the first.
+            FrameInstances copied;
+            for (const auto &prev_fa : annotations.at(prev_frame)) {
+                FrameAnnotation new_fa = make_frame(skeleton.num_nodes, scene->num_cams,
+                                                    current_frame_num, prev_fa.instance_id,
+                                                    prev_fa.category_id);
+                for (int c = 0; c < scene->num_cams && c < (int)prev_fa.cameras.size(); ++c) {
+                    for (int k = 0; k < skeleton.num_nodes && k < (int)prev_fa.cameras[c].keypoints.size(); ++k)
+                        new_fa.cameras[c].keypoints[k] = prev_fa.cameras[c].keypoints[k];
+                    new_fa.cameras[c].active_id = prev_fa.cameras[c].active_id;
                 }
-                new_fa.cameras[c].active_id = prev_fa.cameras[c].active_id;
+                for (int k = 0; k < skeleton.num_nodes && k < (int)prev_fa.kp3d.size(); ++k)
+                    new_fa.kp3d[k] = prev_fa.kp3d[k];
+                copied.push_back(std::move(new_fa));
             }
-            for (int k = 0; k < skeleton.num_nodes && k < (int)prev_fa.kp3d.size(); ++k) {
-                new_fa.kp3d[k] = prev_fa.kp3d[k];
-            }
-            annotations[current_frame_num] = FrameInstances{std::move(new_fa)};
+            annotations[current_frame_num] = std::move(copied);
         }
         ImGui::EndDisabled();
 
@@ -372,9 +375,12 @@ inline void DrawLabelingToolWindow(
                                 "cannot paste",
                                 Toast::Warning, 5.0f);
                 } else {
-                    FrameAnnotation &fa = get_or_create_frame(
-                        annotations, (u32)current_frame_num,
-                        skeleton.num_nodes, scene->num_cams);
+                    // Onto the instance being edited, on a frame started with
+                    // the nearest labelled frame's instances.
+                    FrameAnnotation &fa = instance_or_first(
+                        create_frame_instances(annotations, (u32)current_frame_num,
+                                               skeleton.num_nodes, scene->num_cams),
+                        ctx.active_instance);
                     int n = paste_keypoints(kc, fa, skeleton.num_nodes,
                                             scene->num_cams);
                     toasts.pushSuccess("Pasted " + std::to_string(n) +
