@@ -538,8 +538,15 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                 }
 
                 // Camera order, always.
-                for (int row = 0; row < rows_count; row++)
-                    render_row(row);
+                // A 2D project's cameras are separate videos, labelled one at
+                // a time: only the camera in focus (else the first) has a
+                // row. Calibrated projects show every camera, as the views of
+                // one moment.
+                if (project_is_2d(ctx.pm) && rows_count > 1)
+                    render_row(focused_row >= 0 ? focused_row : 0);
+                else
+                    for (int row = 0; row < rows_count; row++)
+                        render_row(row);
 
                 // Angled-header interaction: the header band is the strip
                 // between band_top and the first body row. TableGetHoveredColumn
