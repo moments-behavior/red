@@ -201,22 +201,48 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                 ImGui::BeginDisabled(state.tailcycle_ranges.size() == 1);
                 if (ImGui::Button("x")) remove_at = (int)i;
                 ImGui::EndDisabled();
-                // Show what the row will actually extract. An unedited row means
-                // the whole recording, which is the most expensive thing the
-                // export can do, so it should never be a surprise.
+                // What the row will write: how many labelled frames fall in it
+                // (a split without any is empty), the frames exported (the
+                // clips, when only frames around labels are kept), and the
+                // images. An unedited row means the whole recording, the most
+                // expensive thing the export can do, so it is never a surprise.
                 {
                     const int last = (r.end > 0 && r.end < tc_total) ? r.end
                                      : (tc_total > 0 ? tc_total - 1 : r.start);
-                    const int n = last >= r.start ? last - r.start + 1 : 0;
+                    const auto labelled_frames = ExportFormats::tailcycle_labelled_frames(
+                        amap, -1, state.tailcycle_layers, r.start, last);
+                    int n = last >= r.start ? last - r.start + 1 : 0;
+                    if (tc_window > 0) {
+                        n = 0;
+                        for (const auto &[a, b] : ExportFormats::tailcycle_clips(
+                                 labelled_frames, r.start, last, tc_window))
+                            n += b - a + 1;
+                    }
                     const long long imgs = ExportFormats::tailcycle_image_estimate(
                         amap, (int)pm.camera_names.size(), state.tailcycle_layers, r.start, last,
                         tc_window);
                     ImGui::SameLine();
-                    if (r.end == 0 && tc_total > 0)
-                        ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.3f, 1.0f),
-                                           "to end: %d frames, %lld images", n, imgs);
+                    const ImVec4 warn(0.95f, 0.65f, 0.3f, 1.0f);
+                    if (labelled_frames.empty())
+                        ImGui::TextColored(warn, "no labelled frames in this range");
+                    else if (r.end == 0 && tc_total > 0 && tc_window <= 0)
+                        ImGui::TextColored(warn, "%d labelled \xC2\xB7 to end: %d frames \xC2\xB7 %lld images",
+                                           (int)labelled_frames.size(), n, imgs);
                     else
-                        ImGui::TextDisabled("%d frames, %lld images", n, imgs);
+                        ImGui::TextDisabled("%d labelled \xC2\xB7 %d frames \xC2\xB7 %lld images",
+                                            (int)labelled_frames.size(), n, imgs);
+                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                        ImGui::SetTooltip(
+                            state.tailcycle_layers == 0
+                                ? "labelled: frames in the range with a label in any camera.\n"
+                                  "frames: what is exported%s.\n"
+                                  "images: 2D writes one session per camera, each with the "
+                                  "frames\naround ITS labels -- so the total need not be a "
+                                  "multiple of the cameras."
+                                : "labelled: frames in the range with a label.\n"
+                                  "frames: what is exported%s.\n"
+                                  "images: frames x cameras.",
+                            tc_window > 0 ? " (the clips around labels)" : " (the whole range)");
                 }
                 ImGui::PopID();
             }
