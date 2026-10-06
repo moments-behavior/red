@@ -295,15 +295,8 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         ImGui::SetTooltip("Settings");
 
-    // --- Right-aligned project name ---
-    if (!pm.project_name.empty()) {
-        float avail = ImGui::GetContentRegionAvail().x;
-        float text_w = ImGui::CalcTextSize(pm.project_name.c_str()).x;
-        if (avail > text_w + 8.0f) {
-            ImGui::SameLine(ImGui::GetWindowWidth() - text_w - 16.0f);
-            ImGui::TextDisabled("%s", pm.project_name.c_str());
-        }
-    }
+    // The project's name is in the window title ("Red - <name>"), so the
+    // menu bar does not repeat it.
 
     ImGui::EndMainMenuBar();
 }
