@@ -37,12 +37,12 @@ inline bool box_hovered_recently() {
     return box_hovered_frame() >= ImGui::GetFrameCount() - 1;
 }
 
-// Per-animal tint. Applied to every node so two animals are told apart at a
-// glance even when they share a skeleton -- which they always do, since the
-// keypoint axis is per session, not per animal.
+// The default colour of an instance, by its place in the frame's list: for
+// its boxes and its square in the Instances row (keypoints keep their node
+// colours). The first is white.
 inline ImVec4 instance_tint(int instance) {
     static const ImVec4 kTints[] = {
-        {1.00f, 1.00f, 1.00f, 1.0f},  // 0: untinted, the animal being labelled
+        {1.00f, 1.00f, 1.00f, 1.0f},  // 0: white
         {1.00f, 0.55f, 0.35f, 1.0f},
         {0.45f, 0.80f, 1.00f, 1.0f},
         {0.60f, 1.00f, 0.55f, 1.0f},
@@ -253,9 +253,8 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
             }
             node_color.w = 0.9f;
 
-            // Tint by animal, and dim the ones that are not being edited.
-            const ImVec4 tint = instance_tint(instance);
-            node_color.x *= tint.x; node_color.y *= tint.y; node_color.z *= tint.z;
+            // Node colours for every instance (an instance's colour is for
+            // its boxes); the ones not being edited are dimmed.
             if (!is_active) { node_color.w *= 0.55f; pt_size *= 0.8f; }
             int id = (skeleton->num_nodes * num_cams) * instance +
                      skeleton->num_nodes * view_idx + node;
