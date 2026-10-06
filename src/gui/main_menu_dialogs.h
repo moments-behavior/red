@@ -348,41 +348,45 @@ inline void HandleMainMenuDialogs(
         ImGui::EndPopup();
     }
 
-    // ChooseMedia (Open Video)
-    if (ImGuiFileDialog::Instance()->Display("ChooseMedia", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk()) {
-            auto selected_files =
-                ImGuiFileDialog::Instance()->GetSelection();
-            pm.media_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
+    // ChooseMedia (Open Video) / ChooseImages (Open Images). Whatever is open
+    // closes first, as for Load Project: loading over running decoders
+    // crashed. An Untitled project with labels asks before it goes.
+    auto open_media = [&](bool images) {
+        auto selected_files = ImGuiFileDialog::Instance()->GetSelection();
+        const std::string folder = ImGuiFileDialog::Instance()->GetCurrentPath();
+        run_or_confirm_unsaved(ctx, [&ctx, &win, images, selected_files, folder,
+                                     media_root_dir, print_metadata_fn,
+                                     nuke_inference_fn]() mutable {
+            close_project(ctx);
+            win.reset();
+            if (nuke_inference_fn) nuke_inference_fn();
+            ProjectManager &pm = ctx.pm;
+            pm.media_folder = folder;
             remember_media_dir(ctx, pm.media_folder);
-            pm.project_name =
-                dir_difference(pm.media_folder, media_root_dir);
-            load_videos(selected_files, ctx.ps, pm, ctx.window_was_decoding,
-                        ctx.demuxers, ctx.dc_context, ctx.scene,
-                        ctx.label_buffer_size, ctx.decoder_threads,
-                        ctx.is_view_focused,
-                        ctx.user_settings.default_realtime_playback);
-            if (print_metadata_fn) print_metadata_fn();
-        }
+            pm.project_name = dir_difference(pm.media_folder, media_root_dir);
+            if (images) {
+                load_images(selected_files, ctx.ps, pm, ctx.imgs_names, ctx.scene,
+                            ctx.dc_context, ctx.label_buffer_size,
+                            ctx.decoder_threads, ctx.is_view_focused,
+                            ctx.window_was_decoding, ImageLayout::Flat, 0.0f,
+                            ctx.user_settings.default_realtime_playback);
+                ctx.input_is_imgs = true;
+            } else {
+                load_videos(selected_files, ctx.ps, pm, ctx.window_was_decoding,
+                            ctx.demuxers, ctx.dc_context, ctx.scene,
+                            ctx.label_buffer_size, ctx.decoder_threads,
+                            ctx.is_view_focused,
+                            ctx.user_settings.default_realtime_playback);
+                if (print_metadata_fn) print_metadata_fn();
+            }
+        });
+    };
+    if (ImGuiFileDialog::Instance()->Display("ChooseMedia", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+        if (ImGuiFileDialog::Instance()->IsOk()) open_media(false);
         ImGuiFileDialog::Instance()->Close();
     }
-
-    // ChooseImages (Open Images)
     if (ImGuiFileDialog::Instance()->Display("ChooseImages", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk()) {
-            auto selected_files =
-                ImGuiFileDialog::Instance()->GetSelection();
-            pm.media_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
-            remember_media_dir(ctx, pm.media_folder);
-            pm.project_name =
-                dir_difference(pm.media_folder, media_root_dir);
-            load_images(selected_files, ctx.ps, pm, ctx.imgs_names, ctx.scene,
-                        ctx.dc_context, ctx.label_buffer_size,
-                        ctx.decoder_threads, ctx.is_view_focused,
-                        ctx.window_was_decoding, ImageLayout::Flat, 0.0f,
-                        ctx.user_settings.default_realtime_playback);
-            ctx.input_is_imgs = true;
-        }
+        if (ImGuiFileDialog::Instance()->IsOk()) open_media(true);
         ImGuiFileDialog::Instance()->Close();
     }
 
