@@ -40,11 +40,6 @@ struct WindowStates {
     SwitchSkeletonState switch_skeleton;
     TracktailWindowState tracktail;
     bool show_help = false;
-    // Save Project (first save of an Untitled project): the fields it shows.
-    bool save_project_show = false;
-    std::string save_project_name;
-    std::string save_project_dir;
-    std::string save_project_error;
     bool show_about = false;   // Help > About Red (a modal, drawn by HandleMainMenuDialogs)
     bool about_open = false;   // its title bar x: ImGui clears this to close it
     // Set by the Welcome window's Recent Projects list; consumed by the

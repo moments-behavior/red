@@ -187,79 +187,49 @@ inline void HandleMainMenuDialogs(
         ImGui::EndPopup();
     }
 
-    // Save Project: name an Untitled project and choose where it goes. A
-    // window, not a modal popup, so its Browse can open a file dialog.
+    // Save Project: one file browser -- pick the folder, keep or change the
+    // name. The project goes in a new folder <folder>/<name>/ holding
+    // <name>.redproj and labeled_data/.
+    auto open_save_dialog = [&](const std::string &dir, const std::string &name) {
+        IGFD::FileDialogConfig cfg;
+        cfg.path = dir;
+        cfg.fileName = name;
+        cfg.flags = ImGuiFileDialogFlags_Modal;
+        ImGuiFileDialog::Instance()->OpenDialog(
+            "SaveUntitledProject", "Save Project (makes a folder with this name)",
+            ".redproj", cfg);
+    };
     if (ctx.save_project_prompt) {
         ctx.save_project_prompt = false;
-        win.save_project_show = true;
-        win.save_project_error.clear();
-        win.save_project_name =
+        open_save_dialog(
+            default_project_root(ctx.user_settings, ctx.default_dir),
             pm.media_folder.empty()
                 ? std::string("Untitled")
-                : std::filesystem::path(pm.media_folder).filename().string();
-        win.save_project_dir =
-            default_project_root(ctx.user_settings, ctx.default_dir);
-        ImGui::SetNextWindowFocus();
+                : std::filesystem::path(pm.media_folder).filename().string());
     }
-    if (ImGuiFileDialog::Instance()->Display("ChooseSaveProjectDir",
+    if (ImGuiFileDialog::Instance()->Display("SaveUntitledProject",
                                              ImGuiWindowFlags_NoCollapse,
                                              ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk())
-            win.save_project_dir = ImGuiFileDialog::Instance()->GetCurrentPath();
-        ImGuiFileDialog::Instance()->Close();
-    }
-    if (win.save_project_show) {
-        ImGui::SetNextWindowSize(ImVec2(560, 0), ImGuiCond_Appearing);
-        bool open = true;
-        if (ImGui::Begin("Save Project", &open,
-                         ImGuiWindowFlags_NoCollapse |
-                             ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::TextUnformatted("Name");
-            ImGui::SetNextItemWidth(400);
-            if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-            const bool enter = ImGui::InputText(
-                "##save_proj_name", &win.save_project_name,
-                ImGuiInputTextFlags_EnterReturnsTrue);
-            ImGui::TextUnformatted("Location");
-            ImGui::SetNextItemWidth(400);
-            ImGui::InputText("##save_proj_dir", &win.save_project_dir);
-            ImGui::SameLine();
-            if (ImGui::Button("Browse##save_proj")) {
-                IGFD::FileDialogConfig cfg;
-                cfg.countSelectionMax = 1;
-                cfg.path = win.save_project_dir;
-                cfg.flags = ImGuiFileDialogFlags_Modal;
-                ImGuiFileDialog::Instance()->OpenDialog(
-                    "ChooseSaveProjectDir", "Save Project In", nullptr, cfg);
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            const std::string dir = ImGuiFileDialog::Instance()->GetCurrentPath();
+            std::string name = ImGuiFileDialog::Instance()->GetCurrentFileName(
+                IGFD_ResultMode_KeepInputFile);
+            if (ends_with_ci(name, ".redproj"))
+                name.resize(name.size() - 8);
+            ImGuiFileDialog::Instance()->Close();
+            std::string err;
+            if (save_untitled_project(ctx, name, dir, &err)) {
+                ctx.toasts.pushSuccess("Saved project " + pm.project_name);
+                auto after = std::move(ctx.after_save_action);
+                ctx.after_save_action = nullptr;
+                if (after) after();
+            } else {
+                // Say why and ask again, where the user left off.
+                ctx.toasts.pushError(err);
+                open_save_dialog(dir, name);
             }
-            ImGui::TextDisabled("Creates %s",
-                                (std::filesystem::path(win.save_project_dir) /
-                                 win.save_project_name)
-                                    .string()
-                                    .c_str());
-            if (!win.save_project_error.empty())
-                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "%s",
-                                   win.save_project_error.c_str());
-            ImGui::Spacing();
-            if (ImGui::Button("Save") || enter) {
-                std::string err;
-                if (save_untitled_project(ctx, win.save_project_name,
-                                          win.save_project_dir, &err)) {
-                    win.save_project_show = false;
-                    ctx.toasts.pushSuccess("Saved project " + pm.project_name);
-                    auto after = std::move(ctx.after_save_action);
-                    ctx.after_save_action = nullptr;
-                    if (after) after();
-                } else {
-                    win.save_project_error = err;
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel")) open = false;
-        }
-        ImGui::End();
-        if (!open) {
-            win.save_project_show = false;
+        } else {
+            ImGuiFileDialog::Instance()->Close();
             ctx.after_save_action = nullptr;   // whatever waited on it is off
         }
     }
