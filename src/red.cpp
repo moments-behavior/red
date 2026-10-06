@@ -1586,31 +1586,30 @@ int main(int argc, char **argv) {
                             int nn = skeleton.num_nodes;
                             int nc = (int)scene->num_cams;
 
-                            // Bbox tool. Boxes go on the animal being
-                            // edited; classes are the project's.
-                            auto &box_classes = pm.annotation_config.class_names;
+                            // Bbox tool. Boxes go on the instance being
+                            // edited.
                             if (win.bbox.enabled) {
-                                bbox_handle_input(win.bbox, box_classes,
+                                bbox_handle_input(win.bbox,
                                                   annotations, frame, j,
                                                   active_instance, nn, nc,
                                                   iw, ih);
                                 bbox_draw_cursor(win.bbox, j);
                             }
                             if (display.show_bboxes) {
-                                bbox_draw_overlays(win.bbox, box_classes,
+                                bbox_draw_overlays(win.bbox,
                                                    annotations, frame, j,
                                                    iw, ih);
                             }
 
                             // OBB tool
                             if (win.obb.enabled) {
-                                obb_handle_input(win.obb, win.bbox, box_classes,
+                                obb_handle_input(win.obb,
                                                  annotations, frame, j,
                                                  active_instance, nn, nc,
                                                  iw, ih);
                             }
                             if (display.show_bboxes) {
-                                obb_draw_overlays(win.obb, win.bbox, box_classes,
+                                obb_draw_overlays(win.obb, win.bbox,
                                                   annotations, frame, j, iw, ih);
                             }
 

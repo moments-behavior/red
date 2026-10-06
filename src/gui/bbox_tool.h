@@ -2,8 +2,10 @@
 // bbox_tool.h — Axis-aligned bounding box labeling tool
 //
 // Shift+drag draws a new bbox: press with Shift held, drag, let go. Bboxes are
-// stored in the unified AnnotationMap (CameraAnnotation extras), on an
-// instance of the selected class (box_target). The class list is
+// stored in the unified AnnotationMap (CameraAnnotation extras), on the
+// instance being edited. One class for now: tailcycle, which red exports to,
+// has no class column, so a second class would not survive it. The labels
+// keep a class per instance (0) so classes can come back. The class list is
 // pm.annotation_config.class_names, saved with the labels (annotations.json).
 
 #include "imgui.h"
@@ -21,7 +23,6 @@ struct BBoxToolState {
     bool show = false;
     bool enabled = false; // master toggle for bbox drawing mode
 
-    int current_class = 0;      // index into the project's class list
     bool show_ids = true;
 
     // Drawing state
@@ -36,32 +37,8 @@ struct BBoxToolState {
     int hovered_instance = -1;
 };
 
-// A class's colour, the same every session: the first cyan, the rest spread
-// round the hue circle by the golden ratio.
-inline ImVec4 box_class_color(int i) {
-    if (i <= 0) return ImVec4(0.3f, 1.0f, 1.0f, 1.0f);
-    float hue = i * 0.618033f;
-    hue -= std::floor(hue);
-    return (ImVec4)ImColor::HSV(hue, 0.85f, 0.95f);
-}
-
-inline const char *box_class_name(const std::vector<std::string> &classes, int i) {
-    return i >= 0 && i < (int)classes.size() ? classes[i].c_str() : "?";
-}
-
-// Adds Class_<n>, n its index, to the list and makes it current.
-inline void add_box_class(BBoxToolState &state, std::vector<std::string> &classes) {
-    state.current_class = (int)classes.size();
-    classes.push_back("Class_" + std::to_string(classes.size()));
-}
-
-// The class a new box gets: the current one, after making Class_0 if the list
-// is empty (a new project's is).
-inline int box_class_for_new(BBoxToolState &state, std::vector<std::string> &classes) {
-    if (classes.empty()) add_box_class(state, classes);
-    state.current_class = std::clamp(state.current_class, 0, (int)classes.size() - 1);
-    return state.current_class;
-}
+// Boxes are drawn in one colour; the hovered one at full strength.
+inline ImVec4 box_color() { return ImVec4(0.3f, 1.0f, 1.0f, 1.0f); }
 
 // The instance a new box or OBB of class `cat` goes on, made the one being
 // edited (active_instance, an index into the frame's instances):
@@ -96,7 +73,6 @@ inline bool box_key(ImGuiKey k) {
 
 // Draw bbox rectangles on a camera's ImPlot view: every animal's.
 inline void bbox_draw_overlays(const BBoxToolState &state,
-                               const std::vector<std::string> &classes,
                                const AnnotationMap &amap, u32 frame,
                                int cam_idx, int img_w, int img_h) {
     (void)img_w;
@@ -106,7 +82,7 @@ inline void bbox_draw_overlays(const BBoxToolState &state,
         double dxs[] = {state.start_x, mouse.x, mouse.x, state.start_x, state.start_x};
         double dys[] = {state.start_y, state.start_y, mouse.y, mouse.y, state.start_y};
         ImPlotSpec nspec;
-        nspec.LineColor = box_class_color(state.current_class);
+        nspec.LineColor = box_color();
         ImPlot::PlotLine("##bbox_new", dxs, dys, 5, nspec);
     }
 
@@ -119,8 +95,7 @@ inline void bbox_draw_overlays(const BBoxToolState &state,
         const auto &cam = fa.cameras[cam_idx];
         if (!cam.has_bbox()) continue;
 
-        const int ci = fa.category_id;
-        ImVec4 color = box_class_color(ci);
+        ImVec4 color = box_color();
         const bool hot = state.hovered && cam_idx == state.hovered_cam &&
                          (int)inst == state.hovered_instance;
         if (!hot) color.w *= 0.6f;
@@ -143,10 +118,8 @@ inline void bbox_draw_overlays(const BBoxToolState &state,
         ImGui::PopID();
 
         if (state.show_ids) {
-            char label[96];
-            // Class, then which one of that class: "Class_0 #1".
-            snprintf(label, sizeof(label), "%s #%d",
-                     box_class_name(classes, ci), fa.instance_id);
+            char label[32];
+            snprintf(label, sizeof(label), "#%d", fa.instance_id);
             ImPlot::PlotText(label, x1 + 4, y2_plot - 4);
         }
     }
@@ -160,7 +133,7 @@ inline bool bbox_blocks_pan(const BBoxToolState &state) {
 }
 
 // The pointer while a box can be drawn (Shift over a view) or is being drawn:
-// crosshairs with a small box beside them, in the class colour. Replaces
+// crosshairs with a small box beside them, in the box colour. Replaces
 // ImPlot's "not allowed" cursor, which it shows for a drag on the views
 // bbox_blocks_pan locks. Call inside the camera's plot.
 inline void bbox_draw_cursor(const BBoxToolState &state, int cam_idx) {
@@ -173,7 +146,7 @@ inline void bbox_draw_cursor(const BBoxToolState &state, int cam_idx) {
     const ImVec2 m = ImGui::GetIO().MousePos;
     const ImVec2 lo = ImPlot::GetPlotPos();
     const ImVec2 hi(lo.x + ImPlot::GetPlotSize().x, lo.y + ImPlot::GetPlotSize().y);
-    const ImU32 col = ImGui::GetColorU32(box_class_color(state.current_class));
+    const ImU32 col = ImGui::GetColorU32(box_color());
     const ImU32 cross = IM_COL32(255, 255, 255, 150);
     dl->PushClipRect(lo, hi, true);
     dl->AddLine(ImVec2(lo.x, m.y), ImVec2(m.x - 5, m.y), cross);
@@ -188,9 +161,7 @@ inline void bbox_draw_cursor(const BBoxToolState &state, int cam_idx) {
 }
 
 // Handle bbox input on a focused camera view. Where a box goes: box_target.
-inline void bbox_handle_input(BBoxToolState &state,
-                              std::vector<std::string> &classes,
-                              AnnotationMap &amap, u32 frame, int cam_idx,
+inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap, u32 frame, int cam_idx,
                               int &active_instance, int num_nodes,
                               int num_cameras, int img_w, int img_h) {
     if (!state.enabled) return;
@@ -234,9 +205,8 @@ inline void bbox_handle_input(BBoxToolState &state,
         // Skip tiny accidental drags
         if (x2 - x1 < 3 || y2_plot - y1_plot < 3) return;
 
-        const int cat = box_class_for_new(state, classes);
-        auto &fa = box_target(amap, frame, cat, active_instance, num_nodes,
-                              num_cameras);
+        auto &fa = box_target(amap, frame, /*class*/ 0, active_instance,
+                              num_nodes, num_cameras);
         if (cam_idx < (int)fa.cameras.size()) {
             auto &ext = fa.cameras[cam_idx].get_extras();
             ext.bbox_x = x1;
@@ -285,51 +255,28 @@ inline void bbox_handle_input(BBoxToolState &state,
             fa.cameras[cam_idx].get_extras().has_bbox = false;
             state.hovered = false;
         }
-        // O: delete that animal's box on every camera.
+        // O: delete that instance's box on every camera.
         else if (box_key(ImGuiKey_O)) {
             for (auto &cam : fa.cameras)
                 if (cam.has_bbox()) cam.get_extras().has_bbox = false;
             state.hovered = false;
         }
     }
-
-    // Z/X: previous / next class.
-    const int n = (int)classes.size();
-    if (n > 0 && box_key(ImGuiKey_Z))
-        state.current_class = (state.current_class - 1 + n) % n;
-    if (n > 0 && box_key(ImGuiKey_X))
-        state.current_class = (state.current_class + 1) % n;
 }
 
 // Settings panel for the bbox tool
 inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
+    (void)ctx;
     DrawPanel("Bbox Tool", state.show,
         [&]() {
-        auto &classes = ctx.pm.annotation_config.class_names;
         ImGui::Checkbox("Enable Bbox Drawing", &state.enabled);
         ImGui::Checkbox("Show IDs", &state.show_ids);
 
         ImGui::Separator();
-        ImGui::TextWrapped("Shift+drag: draw a box of the selected class "
-                           "(on the instance being edited if it is of that "
-                           "class). Esc cancels.");
+        ImGui::TextWrapped("Shift+drag: draw a box on the instance being "
+                           "edited (N: next instance). Esc cancels.");
         ImGui::TextWrapped("F: delete the hovered box (this camera)");
         ImGui::TextWrapped("O: delete the hovered instance's box (all cameras)");
-        ImGui::TextWrapped("Z/X: previous / next class");
-
-        // Class list: saved with the labels.
-        ImGui::SeparatorText("Classes");
-        if (classes.empty())
-            ImGui::TextDisabled("None yet -- the first box adds Class_0.");
-        for (int i = 0; i < (int)classes.size(); ++i) {
-            ImGui::ColorButton(("##clr" + std::to_string(i)).c_str(),
-                               box_class_color(i), 0, ImVec2(14, 14));
-            ImGui::SameLine();
-            bool sel = (i == state.current_class);
-            if (ImGui::Selectable((classes[i] + "##cls" + std::to_string(i)).c_str(), sel))
-                state.current_class = i;
-        }
-        if (ImGui::Button("+ Add Class")) add_box_class(state, classes);
         },
         nullptr, ImVec2(300, 350));
 }

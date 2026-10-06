@@ -692,34 +692,8 @@ static void test_obb_contains_rotated() {
 // bbox_tool.h: Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-static void test_bbox_next_class_color() {
-    printf("  test_bbox_next_class_color...\n");
-
-    // Colours are valid and differ from class to class.
-    for (int i = 0; i < 6; ++i) {
-        const ImVec4 c = box_class_color(i);
-        EXPECT_TRUE(c.x >= 0 && c.x <= 1 && c.y >= 0 && c.y <= 1 &&
-                    c.z >= 0 && c.z <= 1 && c.w >= 0 && c.w <= 1);
-        if (i > 0) {
-            const ImVec4 p = box_class_color(i - 1);
-            EXPECT_TRUE(fabs(c.x - p.x) > 0.01 || fabs(c.y - p.y) > 0.01 ||
-                        fabs(c.z - p.z) > 0.01);
-        }
-    }
-}
-
 static void test_bbox_classes_and_target() {
     printf("  test_bbox_classes_and_target...\n");
-
-    // The first box of a project with no classes makes Class_0.
-    BBoxToolState state;
-    std::vector<std::string> classes;
-    EXPECT_EQ(box_class_for_new(state, classes), 0);
-    EXPECT_EQ((int)classes.size(), 1);
-    EXPECT_TRUE(classes[0] == "Class_0");
-    add_box_class(state, classes);
-    EXPECT_TRUE(classes[1] == "Class_1");
-    EXPECT_EQ(state.current_class, 1);
 
     // A box goes on the instance being edited when it is of the box's class,
     // not the frame's first.
@@ -2374,7 +2348,6 @@ int main() {
     printf("\n--- SAM Inference ---\n");
 
     printf("\n--- Bbox Tool ---\n");
-    test_bbox_next_class_color();
     test_bbox_classes_and_target();
     test_annotations_json_class_names();
     test_csv_class_and_instance();
