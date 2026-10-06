@@ -58,6 +58,8 @@ struct UserSettings {
     std::vector<float> active_keypoint_color = {1.0f, 1.0f, 1.0f};
 
     // Export defaults
+    // The Export window's last-used values, for every format (named jarvis_*
+    // from when they were JARVIS-only defaults; kept for existing files).
     float jarvis_margin = 50.0f;
     float jarvis_train_ratio = 0.9f;
     int jarvis_seed = 42;

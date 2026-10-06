@@ -215,27 +215,6 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
         }
 #endif
 
-        // --- Annotation Tools ---
-        if (ImGui::CollapsingHeader("Annotation Tools")) {
-            auto &ac = ctx.pm.annotation_config;
-            ImGui::Checkbox("Keypoints", &ac.enable_keypoints);
-            ImGui::Checkbox("Bounding Boxes", &ac.enable_bboxes);
-            ImGui::Checkbox("Oriented Bounding Boxes", &ac.enable_obbs);
-            ImGui::TextDisabled("Enable tools to show their panels in the Tools menu.");
-        }
-
-        // --- Export ---
-        if (ImGui::CollapsingHeader("JARVIS Export Defaults")) {
-            if (ImGui::SliderFloat("Bbox Margin (px)", &s.jarvis_margin, 0.0f, 200.0f))
-                other_changed = true;
-            if (ImGui::SliderFloat("Train Ratio", &s.jarvis_train_ratio, 0.5f, 0.99f))
-                other_changed = true;
-            if (ImGui::InputInt("Random Seed", &s.jarvis_seed))
-                other_changed = true;
-            if (ImGui::SliderInt("JPEG Quality", &s.jarvis_jpeg_quality, 10, 100))
-                other_changed = true;
-        }
-
         ImGui::Separator();
 
         if (ImGui::Button("Save")) {

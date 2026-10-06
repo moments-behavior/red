@@ -440,6 +440,20 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     ecfg.train_ratio        = state.train_ratio;
                     ecfg.seed               = state.seed;
                     ecfg.jpeg_quality       = state.jpeg_quality;
+                    // Remembered for next time, any format, any project.
+                    {
+                        UserSettings &us = ctx.user_settings;
+                        if (us.jarvis_margin != state.margin ||
+                            us.jarvis_train_ratio != state.train_ratio ||
+                            us.jarvis_seed != state.seed ||
+                            us.jarvis_jpeg_quality != state.jpeg_quality) {
+                            us.jarvis_margin = state.margin;
+                            us.jarvis_train_ratio = state.train_ratio;
+                            us.jarvis_seed = state.seed;
+                            us.jarvis_jpeg_quality = state.jpeg_quality;
+                            save_user_settings(us);
+                        }
+                    }
                     ecfg.camera_params      = pm.camera_params;
                     ecfg.telecentric        = pm.telecentric;
                     ecfg.scale_factor       = state.scale_factor;

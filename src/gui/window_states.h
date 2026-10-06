@@ -83,10 +83,8 @@ struct WindowStates {
         export_win.include_video_index = false;
         export_win.status.clear();
         export_win.output_dir.clear();
-        export_win.margin = 50.0f;
-        export_win.train_ratio = 0.9f;
-        export_win.seed = 42;
-        export_win.jpeg_quality = 95;
+        // margin / train_ratio / seed / jpeg_quality are kept: the last
+        // used, remembered across projects (saved at each export).
         export_win.in_progress.store(false);
         export_win.images_saved.store(0);
         export_win.images_total = 0;
