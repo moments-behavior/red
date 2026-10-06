@@ -21,13 +21,11 @@ void image_texture_free(ImageTexture *tex) {
     *tex = ImageTexture{};
 }
 
-bool image_texture_load(const std::string &path, ImageTexture *out,
-                        std::string *err) {
+bool image_texture_from_rgba(const unsigned char *rgba, int w, int h,
+                             ImageTexture *out, std::string *err) {
     image_texture_free(out);
-    int w = 0, h = 0, channels = 0;
-    unsigned char *rgba = stbi_load(path.c_str(), &w, &h, &channels, 4);
-    if (!rgba) {
-        if (err) *err = std::string("Could not read image: ") + stbi_failure_reason();
+    if (!rgba || w <= 0 || h <= 0) {
+        if (err) *err = "No image to show";
         return false;
     }
 #ifdef __APPLE__
@@ -40,18 +38,33 @@ bool image_texture_load(const std::string &path, ImageTexture *out,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE,
                  rgba);
     glBindTexture(GL_TEXTURE_2D, 0);
     ImTextureID id = (ImTextureID)(intptr_t)name;
 #endif
-    stbi_image_free(rgba);
     if (!id) {
-        if (err) *err = "Could not create a texture for " + path;
+        if (err) *err = "Could not create a texture";
         return false;
     }
     out->id = id;
     out->width = w;
     out->height = h;
     return true;
+}
+
+bool image_texture_load(const std::string &path, ImageTexture *out,
+                        std::string *err) {
+    int w = 0, h = 0, channels = 0;
+    unsigned char *rgba = stbi_load(path.c_str(), &w, &h, &channels, 4);
+    if (!rgba) {
+        image_texture_free(out);
+        if (err) *err = std::string("Could not read image: ") + stbi_failure_reason();
+        return false;
+    }
+    const bool ok = image_texture_from_rgba(rgba, w, h, out, err);
+    stbi_image_free(rgba);
+    if (!ok && err) *err += " for " + path;
+    return ok;
 }

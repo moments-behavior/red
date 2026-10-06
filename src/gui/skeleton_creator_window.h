@@ -24,10 +24,14 @@
 #include <ImGuiFileDialog.h>
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
+#if defined(RED_HAVE_CUDA)
+#include <cuda_runtime.h>
+#endif
 
 struct SkeletonCreatorNode {
     ImPlotPoint position{0.5, 0.5};
@@ -49,6 +53,74 @@ struct SkeletonCreatorEdge {
     SkeletonCreatorEdge() = default;
     SkeletonCreatorEdge(int a, int b) : node1_id(a), node2_id(b) {}
 };
+
+// The frame on screen in the camera view being looked at (the focused one,
+// else the first), as RGBA8 rows top to bottom -- for tracing a skeleton over.
+// Read from the display ring: a VideoToolbox BGRA pixel buffer on macOS, RGBA
+// in host memory (software decoding, images), or RGBA on the GPU (CUDA).
+inline bool current_view_rgba(const AppContext &ctx, std::vector<uint8_t> &rgba,
+                              int &w, int &h, std::string &err) {
+    const RenderScene *scene = ctx.scene;
+    if (!ctx.ps.video_loaded || !scene || scene->num_cams == 0 || !scene->display_buffer) {
+        err = "No video or images loaded";
+        return false;
+    }
+    int cam = 0;
+    for (int c = 0; c < (int)ctx.is_view_focused.size() && c < (int)scene->num_cams; ++c)
+        if (ctx.is_view_focused[c]) { cam = c; break; }
+    int slot = -1;
+    for (int s = 0; s < (int)scene->size_of_buffer; ++s) {
+        const auto &pb = scene->display_buffer[cam][s];
+        if (pb.frame_number.load() == ctx.current_frame_num &&
+            !pb.available_to_write.load()) { slot = s; break; }
+    }
+    if (slot < 0) {
+        err = "This frame is not decoded yet -- try again in a moment";
+        return false;
+    }
+    const auto &pb = scene->display_buffer[cam][slot];
+    w = (int)scene->image_width[cam];
+    h = (int)scene->image_height[cam];
+    rgba.assign((size_t)w * h * 4, 0);
+#ifdef __APPLE__
+    if (pb.pixel_buffer) {   // VideoToolbox: BGRA, rows may be padded
+        CVPixelBufferRef buf = pb.pixel_buffer;
+        CVPixelBufferLockBaseAddress(buf, kCVPixelBufferLock_ReadOnly);
+        const auto *base = (const uint8_t *)CVPixelBufferGetBaseAddress(buf);
+        const size_t stride = CVPixelBufferGetBytesPerRow(buf);
+        w = (int)CVPixelBufferGetWidth(buf);
+        h = (int)CVPixelBufferGetHeight(buf);
+        rgba.assign((size_t)w * h * 4, 0);
+        for (int y = 0; base && y < h; ++y) {
+            const uint8_t *src = base + (size_t)y * stride;
+            uint8_t *dst = rgba.data() + (size_t)y * w * 4;
+            for (int x = 0; x < w; ++x) {
+                dst[4 * x + 0] = src[4 * x + 2];
+                dst[4 * x + 1] = src[4 * x + 1];
+                dst[4 * x + 2] = src[4 * x + 0];
+                dst[4 * x + 3] = 255;
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(buf, kCVPixelBufferLock_ReadOnly);
+        return base != nullptr;
+    }
+#endif
+    if (!pb.frame) {
+        err = "This frame has no pixels to read";
+        return false;
+    }
+    if (scene->use_cpu_buffer) {
+        std::memcpy(rgba.data(), pb.frame, rgba.size());
+        return true;
+    }
+#if defined(RED_HAVE_CUDA)
+    if (cudaMemcpy(rgba.data(), pb.frame, rgba.size(), cudaMemcpyDeviceToHost) ==
+        cudaSuccess)
+        return true;
+#endif
+    err = "Could not read this frame";
+    return false;
+}
 
 struct SkeletonCreatorState {
     bool show = false;
@@ -198,6 +270,23 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
             ImGui::SetTooltip("Show a picture behind the nodes to trace over. "
                               "It is not saved with the skeleton.");
+        // Or the frame on screen, when there is one.
+        if (ctx.ps.video_loaded) {
+            ImGui::SameLine();
+            if (ImGui::Button("Current Frame")) {
+                std::vector<uint8_t> rgba;
+                int w = 0, h = 0;
+                std::string err;
+                if (current_view_rgba(ctx, rgba, w, h, err) &&
+                    image_texture_from_rgba(rgba.data(), w, h, &st.background, &err))
+                    st.reset_view = true;
+                else
+                    ctx.toasts.pushError(err);
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("Trace over the frame showing now, in the camera "
+                                  "view you are looking at.");
+        }
         if (st.background.valid()) {
             ImGui::SameLine();
             if (ImGui::Button("Clear Image")) image_texture_free(&st.background);

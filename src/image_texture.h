@@ -20,4 +20,9 @@ struct ImageTexture {
 bool image_texture_load(const std::string &path, ImageTexture *out,
                         std::string *err);
 
+// Upload w x h RGBA8 pixels (rows top to bottom) into *out, replacing and
+// freeing whatever *out held.
+bool image_texture_from_rgba(const unsigned char *rgba, int w, int h,
+                             ImageTexture *out, std::string *err);
+
 void image_texture_free(ImageTexture *tex);
