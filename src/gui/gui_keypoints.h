@@ -360,7 +360,7 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                         std::isfinite((*node_errors)[node])) {
                         std::ostringstream e;
                         e << std::fixed << std::setprecision(1) << (*node_errors)[node];
-                        label += "  reprojection " + e.str() + " px";
+                        label += "\nreprojection " + e.str() + " px";   // its own line
                     }
                 }
                 if (!label.empty()) {
