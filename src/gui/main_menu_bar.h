@@ -122,7 +122,8 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         // Where this project's per-camera timestamps are, for the desync fix
         // and Frame Drops. A project setting: red does not look for them.
         const bool can_set_timestamps = !pm.project_path.empty() &&
-                                        ps.video_loaded && !ctx.input_is_imgs;
+                                        ps.video_loaded && !ctx.input_is_imgs &&
+                                        !is_2d;
         ImGui::BeginDisabled(!can_set_timestamps);
         if (ImGui::MenuItem("Camera Timestamps...")) {
             IGFD::FileDialogConfig config;
@@ -139,6 +140,9 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             if (!can_set_timestamps)
                 ImGui::SetTooltip(pm.untitled
                                       ? "Save the project first (" RED_MOD_KEY "+S)."
+                                  : is_2d && ps.video_loaded
+                                      ? "For calibrated cameras: a 2D project's "
+                                        "videos have their own timelines."
                                       : "Open a video project first.");
             else if (pm.timestamps_folder.empty())
                 ImGui::SetTooltip("Choose the folder with the cameras' frame "
