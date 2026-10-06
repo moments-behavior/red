@@ -11,6 +11,7 @@
 // as well, so it needs a backend-neutral texture path first.
 
 #include "app_context.h"
+#include "decoder.h"   // RED_FRAME_BGRA
 #include "gui/panel.h"
 #include "gui/gui_helpers.h"
 #include "gui/shortcuts.h"
@@ -56,8 +57,9 @@ struct SkeletonCreatorEdge {
 
 // The frame on screen in the camera view being looked at (the focused one,
 // else the first), as RGBA8 rows top to bottom -- for tracing a skeleton over.
-// Read from the display ring: a VideoToolbox BGRA pixel buffer on macOS, RGBA
-// in host memory (software decoding, images), or RGBA on the GPU (CUDA).
+// Read from the display ring: a VideoToolbox BGRA pixel buffer on macOS, the
+// host frame (software decoding, images: BGRA on macOS, RGBA elsewhere), or
+// RGBA on the GPU (CUDA).
 inline bool current_view_rgba(const AppContext &ctx, std::vector<uint8_t> &rgba,
                               int &w, int &h, std::string &err) {
     const RenderScene *scene = ctx.scene;
@@ -111,6 +113,11 @@ inline bool current_view_rgba(const AppContext &ctx, std::vector<uint8_t> &rgba,
     }
     if (scene->use_cpu_buffer) {
         std::memcpy(rgba.data(), pb.frame, rgba.size());
+#if defined(RED_FRAME_BGRA)
+        // Host frames are BGRA where the display wants it (macOS, see
+        // decoder.cpp); the background texture is RGBA.
+        for (size_t i = 0; i + 3 < rgba.size(); i += 4) std::swap(rgba[i], rgba[i + 2]);
+#endif
         return true;
     }
 #if defined(RED_HAVE_CUDA)
