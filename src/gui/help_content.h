@@ -110,7 +110,7 @@ inline const std::vector<Group> &shortcut_groups() {
             {S::PasteKeypoints, nullptr, "Paste the copied keypoints onto this frame", Gate::Always,
                  "Overwrites those keypoints on the target frame"},
             {S::DeleteKeypoint, nullptr, "Delete keypoints", Gate::Always,
-                 "Over a cell: that camera. Over a name: all cameras. Otherwise: the whole selection, all cameras"},
+                 "Over a cell: that camera. Over a name: all cameras. Otherwise: the whole selection, all cameras. (A 2D project: the camera in focus only)"},
         }},
         {"Bbox tool", "When the Bbox tool is enabled, over a camera view", Gate::ToolBbox, {
             {S::COUNT, "Shift + drag", "Draw a box of the selected class: press with Shift held, drag, let go (Esc cancels). It goes on the instance being edited, or starts the next instance if that one already has a box on this camera"},

@@ -33,6 +33,16 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
         if (skeleton.num_nodes > 0 && skeleton.has_skeleton) {
             const int rows_count = scene->num_cams;
             const int columns_count = skeleton.num_nodes + 1;
+            // A 2D project with several cameras: separate videos, labelled one
+            // at a time, so the table is the focused camera's (else the
+            // first) and what it does by keypoint name stays on that camera.
+            // -1 = every camera (calibrated projects).
+            int only_cam = -1;
+            if (project_is_2d(ctx.pm) && rows_count > 1) {
+                only_cam = 0;
+                for (int c = 0; c < rows_count && c < (int)is_view_focused.size(); ++c)
+                    if (is_view_focused[c]) { only_cam = c; break; }
+            }
 
             // Keep the multi-selection sized to the current skeleton.
             kc.ensure_size(skeleton.num_nodes);
@@ -542,8 +552,8 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                 // a time: only the camera in focus (else the first) has a
                 // row. Calibrated projects show every camera, as the views of
                 // one moment.
-                if (project_is_2d(ctx.pm) && rows_count > 1)
-                    render_row(focused_row >= 0 ? focused_row : 0);
+                if (only_cam >= 0)
+                    render_row(only_cam);
                 else
                     for (int row = 0; row < rows_count; row++)
                         render_row(row);
@@ -606,8 +616,9 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                 if (keypoints_find) {
                                     auto &fa =
                                         instance_or_first(annotations.at(current_frame_num), ctx.active_instance);
-                                    for (auto &cam : fa.cameras)
-                                        cam.active_id = (u32)node;
+                                    for (int c = 0; c < (int)fa.cameras.size(); ++c)
+                                        if (only_cam < 0 || c == only_cam)
+                                            fa.cameras[(size_t)c].active_id = (u32)node;
                                 }
                             }
                         }
@@ -639,12 +650,21 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                 const bool win_hovered = ImGui::IsWindowHovered(
                     ImGuiHoveredFlags_RootAndChildWindows);
                 auto delete_selection = [&]() {
-                    int n = delete_selected_all_cameras(
-                        kc, fa, skeleton.num_nodes, scene->num_cams);
+                    int n = 0;
+                    if (only_cam >= 0) {
+                        for (int node = 0; node < skeleton.num_nodes; ++node)
+                            if (kc.is_selected(node)) {
+                                delete_node_from_camera(fa, node, only_cam);
+                                ++n;
+                            }
+                    } else {
+                        n = delete_selected_all_cameras(kc, fa, skeleton.num_nodes,
+                                                        scene->num_cams);
+                    }
                     if (n)
                         ctx.toasts.pushSuccess(
-                            "Deleted " + std::to_string(n) +
-                            " keypoint(s) from all cameras");
+                            "Deleted " + std::to_string(n) + " keypoint(s) from " +
+                            (only_cam >= 0 ? "this camera" : "all cameras"));
                 };
                 if (win_hovered && kc.count() >= 2) {
                     // A built-up multi-selection takes priority over whatever is
@@ -655,8 +675,11 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                 } else if (hover_row >= 0 && hover_node >= 0) {
                     delete_node_from_camera(fa, hover_node, hover_row);
                 } else if (hover_header_node >= 0) {
-                    delete_node_all_cameras(fa, hover_header_node,
-                                            scene->num_cams);
+                    if (only_cam >= 0)
+                        delete_node_from_camera(fa, hover_header_node, only_cam);
+                    else
+                        delete_node_all_cameras(fa, hover_header_node,
+                                                scene->num_cams);
                 } else if (win_hovered && kc.any()) {
                     delete_selection();
                 }
