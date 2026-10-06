@@ -1715,15 +1715,25 @@ int main(int argc, char **argv) {
                                     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
                                         ImGui::SetTooltip("No animal is in this camera on this "
                                                           "frame: every instance absent,\nits boxes here removed.");
-                                    for (auto &fa : it->second) {
-                                        if (j >= fa.cameras.size()) continue;
-                                        auto &cam = fa.cameras[j];
-                                        const bool absent = cam.is_absent();
-                                        const std::string item =
-                                            info.instance_name(fa.instance_id) +
-                                            " absent here";
-                                        if (ImGui::MenuItem(item.c_str(), nullptr, absent))
-                                            set_absent(cam, !absent);
+                                    // One toggle each: inline for a few, in a
+                                    // submenu for more so the menu stays short.
+                                    auto toggles = [&]() {
+                                        for (auto &fa : it->second) {
+                                            if (j >= fa.cameras.size()) continue;
+                                            auto &cam = fa.cameras[j];
+                                            const bool absent = cam.is_absent();
+                                            const std::string item =
+                                                info.instance_name(fa.instance_id) +
+                                                " absent here";
+                                            if (ImGui::MenuItem(item.c_str(), nullptr, absent))
+                                                set_absent(cam, !absent);
+                                        }
+                                    };
+                                    if (it->second.size() <= 3) {
+                                        toggles();
+                                    } else if (ImGui::BeginMenu("Each instance")) {
+                                        toggles();
+                                        ImGui::EndMenu();
                                     }
                                 }
                             }
