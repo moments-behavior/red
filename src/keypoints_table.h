@@ -48,7 +48,7 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
             // Cells take the views' colouring (right-click a view > Keypoint
             // Colours): each keypoint's own colour, the instance's, or the
             // reprojection error -- per camera in its row, and in the 3D row
-            // the worst camera's, so red there means some view disagrees.
+            // the mean over the cameras.
             using KC = DisplayState::KeypointColoring;
             std::vector<std::vector<ImVec4>> row_cols((size_t)rows_count);
             std::vector<ImVec4> cols3d;
@@ -63,13 +63,17 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                         fa, r, skeleton.num_nodes, ctx.pm.camera_params[(size_t)r],
                         (double)scene->image_height[r]);
             }
-            auto worst_err = [&](int node) {   // over every camera, NaN for none
-                double w = std::nan("");
+            // Mean over the cameras it has an error in; NaN for none.
+            auto mean_err = [&](int node, int *count = nullptr) {
+                double sum = 0;
+                int n = 0;
                 for (const auto &re : row_errs)
-                    if (node < (int)re.size() && std::isfinite(re[(size_t)node]) &&
-                        !(re[(size_t)node] <= w))
-                        w = re[(size_t)node];
-                return w;
+                    if (node < (int)re.size() && std::isfinite(re[(size_t)node])) {
+                        sum += re[(size_t)node];
+                        ++n;
+                    }
+                if (count) *count = n;
+                return n ? sum / n : std::nan("");
             };
             if (keypoints_find && ctx.display.keypoint_coloring != KC::ByNode) {
                 const auto &fa = instance_or_first(annotations.at(current_frame_num),
@@ -85,7 +89,7 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                         for (double e : row_errs[(size_t)r])
                             row_cols[(size_t)r].push_back(reprojection_error_color(e));
                     for (int k = 0; k < nn; ++k)
-                        cols3d.push_back(reprojection_error_color(worst_err(k)));
+                        cols3d.push_back(reprojection_error_color(mean_err(k)));
                 }
             }
             // " · reprojection 3.4 px" for a cell, or "" with none.
@@ -588,24 +592,17 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                             "##kp3dcell",
                             ImVec2(cell_w, ImGui::GetFrameHeight()));
                         if (k3.exist && ImGui::IsItemHovered()) {
-                            // Its reprojection error in each camera, and the
-                            // worst (what the cell's colour shows, by error).
+                            // Its mean reprojection error over the cameras
+                            // (what the cell's colour shows, by error); each
+                            // camera's is in its own row.
                             std::string errs;
-                            for (int r = 0; r < (int)row_errs.size(); ++r) {
-                                if (node >= (int)row_errs[(size_t)r].size() ||
-                                    !std::isfinite(row_errs[(size_t)r][(size_t)node]))
-                                    continue;
-                                char b[96];
-                                snprintf(b, sizeof(b), "%s%s %.1f px", errs.empty() ? "" : "  ",
-                                         r < (int)pm.camera_names.size()
-                                             ? pm.camera_names[(size_t)r].c_str() : "cam",
-                                         row_errs[(size_t)r][(size_t)node]);
-                                errs += b;
-                            }
-                            if (!errs.empty()) {
-                                char b[48];
-                                snprintf(b, sizeof(b), "\n(worst %.1f px)", worst_err(node));
-                                errs = "\nreprojection: " + errs + b;
+                            int n_err = 0;
+                            const double m = mean_err(node, &n_err);
+                            if (n_err > 0) {
+                                char b[80];
+                                snprintf(b, sizeof(b), "\nreprojection: mean %.1f px (%d camera%s)",
+                                         m, n_err, n_err == 1 ? "" : "s");
+                                errs = b;
                             }
                             ImGui::SetTooltip(
                                 "%s\n%s\n(%.2f, %.2f, %.2f)%s",
