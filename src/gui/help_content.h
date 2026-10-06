@@ -113,8 +113,8 @@ inline const std::vector<Group> &shortcut_groups() {
         }},
         {"Bbox tool", "When the Bbox tool is enabled, over a camera view", Gate::ToolBbox, {
             {S::COUNT, "Shift + drag", "Draw a box of the selected class on the instance being edited: press with Shift held, drag, let go (Esc cancels)"},
-            {S::COUNT, "F", "Delete the hovered box on this camera (a hovered keypoint takes F first)"},
-            {S::COUNT, "O", "Delete the hovered instance's box on all cameras"},
+            {S::COUNT, "R", "Delete the hovered box on this camera (a hovered keypoint takes R first)"},
+            {S::COUNT, "F", "Delete the hovered instance's box on all cameras (a hovered keypoint takes F first)"},
             {S::COUNT, "Z  /  X", "Previous / next class (saved with the labels; YOLO export uses them)"},
         }},
         {"OBB tool", "When the OBB tool is enabled", Gate::ToolObb, {

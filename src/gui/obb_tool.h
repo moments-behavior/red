@@ -32,7 +32,7 @@ struct OBBToolState {
     double ax1_x = 0, ax1_y = 0;   // axis point 1 (ImPlot coords)
     double ax2_x = 0, ax2_y = 0;   // axis point 2 (ImPlot coords)
 
-    // Hover state: the OBB under the pointer, by camera and animal
+    // Hover state: the OBB under the pointer, by camera and instance
     bool hovered = false;
     int hovered_cam = -1;
     int hovered_instance = -1;
@@ -101,7 +101,7 @@ inline bool obb_contains(double cx, double cy, double w, double h,
     return std::abs(lx) <= w / 2.0 && std::abs(ly) <= h / 2.0;
 }
 
-// Draw OBB overlays on a camera's ImPlot view: every animal's.
+// Draw OBB overlays on a camera's ImPlot view: every instance's.
 inline void obb_draw_overlays(OBBToolState &state, const BBoxToolState &bbox_state,
                                const BoxClasses &classes,
                                const AnnotationMap &amap, u32 frame,
@@ -234,7 +234,7 @@ inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
             double img_cy = img_h - cy;
             double img_angle = -angle;
 
-            // Store on the animal being edited
+            // Store on the instance being edited
             const int cat = box_class_for_new(bbox_state, classes);
             auto &fa = box_target(amap, frame, active_instance, num_nodes,
                                   num_cameras);
@@ -261,7 +261,7 @@ inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
         state.draw_state = OBBDrawState::Idle;
     }
 
-    // Hover detection: the smallest OBB under the pointer, any animal.
+    // Hover detection: the smallest OBB under the pointer, any instance.
     state.hovered = false;
     state.hovered_cam = -1;
     state.hovered_instance = -1;

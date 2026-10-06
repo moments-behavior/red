@@ -33,7 +33,7 @@ struct BBoxToolState {
     int drawing_cam = -1;       // the camera view it is being drawn in
     double start_x = 0, start_y = 0;
 
-    // Hover state: the box under the pointer, by camera and animal (index
+    // Hover state: the box under the pointer, by camera and instance (index
     // into the frame's instances).
     bool hovered = false;
     int hovered_cam = -1;
@@ -95,7 +95,7 @@ inline bool box_key(ImGuiKey k) {
            ImGui::IsKeyPressed(k, false);
 }
 
-// Draw bbox rectangles on a camera's ImPlot view: every animal's.
+// Draw bbox rectangles on a camera's ImPlot view: every instance's.
 inline void bbox_draw_overlays(const BBoxToolState &state,
                                const BoxClasses &classes,
                                const AnnotationMap &amap, u32 frame,
@@ -252,7 +252,7 @@ inline void bbox_handle_input(BBoxToolState &state,
     }
     if (state.drawing) return;
 
-    // Hover: the smallest box under the pointer, over every animal, so a box
+    // Hover: the smallest box under the pointer, over every instance, so a box
     // inside another can still be reached.
     state.hovered = false;
     state.hovered_cam = -1;
@@ -280,16 +280,16 @@ inline void bbox_handle_input(BBoxToolState &state,
         }
     }
 
+    // R / F, as for keypoints: the hovered box on this camera / that
+    // instance's box on every camera. A keypoint under the pointer keeps
+    // both keys for itself.
     if (state.hovered) {
+        mark_box_hovered();
         auto &fa = it->second[(size_t)state.hovered_instance];
-        // F: delete the hovered box on this camera. A keypoint under the
-        // pointer keeps F for itself (delete it from all views).
-        if (!keypoint_hovered_now() && box_key(ImGuiKey_F)) {
+        if (!keypoint_hovered_now() && box_key(ImGuiKey_R)) {
             fa.cameras[cam_idx].get_extras().has_bbox = false;
             state.hovered = false;
-        }
-        // O: delete that animal's box on every camera.
-        else if (box_key(ImGuiKey_O)) {
+        } else if (!keypoint_hovered_now() && box_key(ImGuiKey_F)) {
             for (auto &cam : fa.cameras)
                 if (cam.has_bbox()) cam.get_extras().has_bbox = false;
             state.hovered = false;
@@ -316,8 +316,8 @@ inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
         ImGui::TextWrapped("Shift+drag: draw a box of the selected class on "
                            "the instance being edited (N: next instance). "
                            "Esc cancels.");
-        ImGui::TextWrapped("F: delete the hovered box (this camera)");
-        ImGui::TextWrapped("O: delete the hovered instance's box (all cameras)");
+        ImGui::TextWrapped("R: delete the hovered box (this camera)");
+        ImGui::TextWrapped("F: delete the hovered instance's box (all cameras)");
         ImGui::TextWrapped("Z/X: previous / next class");
 
         // Class list: saved with the labels.

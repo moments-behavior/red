@@ -25,6 +25,18 @@ inline bool keypoint_hovered_now() {
     return keypoint_hovered_frame() == ImGui::GetFrameCount();
 }
 
+// Whether a box was under the pointer last frame (the bbox tool runs after
+// the keypoints, so this frame's is not known yet). R over a box deletes the
+// box, so the keypoints' "R with nothing hovered" fallback stands down.
+inline int &box_hovered_frame() {
+    static int frame = -2;
+    return frame;
+}
+inline void mark_box_hovered() { box_hovered_frame() = ImGui::GetFrameCount(); }
+inline bool box_hovered_recently() {
+    return box_hovered_frame() >= ImGui::GetFrameCount() - 1;
+}
+
 // Per-animal tint. Applied to every node so two animals are told apart at a
 // glance even when they share a skeleton -- which they always do, since the
 // keypoint axis is per session, not per animal.
@@ -459,7 +471,8 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                               !ImGui::GetIO().WantTextInput &&
                               cam.active_id < cam.keypoints.size();
 
-    if (plot_keys_ok && ImGui::IsKeyPressed(ImGuiKey_R, false)) {
+    if (plot_keys_ok && !box_hovered_recently() &&
+        ImGui::IsKeyPressed(ImGuiKey_R, false)) {
         cam.keypoints[cam.active_id] = Keypoint2D{};
     }
 
