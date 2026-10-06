@@ -8,6 +8,7 @@
 #include "gui/tailcycle_open_window.h"
 #include <ImGuiFileDialog.h>
 #include <filesystem>
+#include <vector>
 
 // Blender-style welcome/startup screen shown when no project is loaded.
 inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
@@ -34,99 +35,52 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
         return;
     }
 
-    // Title
-    {
-        const char *title = "RED";
-        const char *subtitle = "Multi-Camera Keypoint Labeling Tool";
-        float title_w = ImGui::CalcTextSize(title).x;
-        float sub_w = ImGui::CalcTextSize(subtitle).x;
-        float avail = ImGui::GetContentRegionAvail().x;
+    const float avail_w = ImGui::GetContentRegionAvail().x;
+    auto centered_text = [&](const char *text, bool disabled, ImVec4 col) {
+        ImGui::SetCursorPosX((avail_w - ImGui::CalcTextSize(text).x) * 0.5f +
+                             ImGui::GetStyle().WindowPadding.x);
+        if (disabled) ImGui::TextDisabled("%s", text);
+        else ImGui::TextColored(col, "%s", text);
+    };
 
-        ImGui::SetCursorPosX((avail - title_w) * 0.5f);
-        ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "%s", title);
-
-        ImGui::SetCursorPosX((avail - sub_w) * 0.5f);
-        ImGui::TextDisabled("%s", subtitle);
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-    }
+    // Title, what it is, and the version (what an issue report needs).
+    centered_text("Red", false, ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
+    centered_text("Multi-Camera Keypoint Labeling Tool", true, ImVec4());
+    centered_text(RED_VERSION, true, ImVec4());
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
 
     // Disable all buttons for one frame when the welcome screen first appears,
     // to prevent click-through from a closing dialog's Back button.
     ImGui::BeginDisabled(just_appeared);
 
-    // Open something to look at
+    // Projects first: making one, or opening one. Two equal buttons.
     {
-        float btn_w = 150.0f;
-        float avail = ImGui::GetContentRegionAvail().x;
-        float spacing = 10.0f;
-        float start_x = (avail - 2 * btn_w - spacing) * 0.5f;
-
-        const ImVec2 row(2 * btn_w + spacing, 30);
-        ImGui::SetCursorPosX(start_x);
-        if (ImGui::Button("Open Videos", row)) {
+        const float gap = ImGui::GetStyle().ItemSpacing.x;
+        const ImVec2 sz((avail_w - gap) * 0.5f, 32.0f);
+        if (ImGui::Button("New Project", sz))
+            win.annotation.open();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("Pick the videos or images, the cameras and a "
+                              "skeleton, and start labeling.");
+        ImGui::SameLine(0, gap);
+        if (ImGui::Button("Open Project", sz)) {
             IGFD::FileDialogConfig cfg;
-            cfg.countSelectionMax = 0;
-            cfg.path = media_browse_dir(ctx);
+            cfg.countSelectionMax = 1;
+            cfg.path = default_project_root(ctx.user_settings, ctx.default_dir);
             cfg.flags = ImGuiFileDialogFlags_Modal;
             ImGuiFileDialog::Instance()->OpenDialog(
-                "ChooseMedia", "Select Video(s)",
-                video_ext_filter(), cfg);
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Play videos without a project.");
-
-        // A tailcycle session is not a red project -- it brings its own
-        // cameras, calibration and skeleton -- so it sits up here with Open
-        // Videos rather than under Annotate.
-        if (TailcycleImport::available()) {
-            ImGui::Spacing();
-            // Line it up under the buttons above.
-            ImGui::SetCursorPosX(start_x);
-            ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
-            if (ImGui::Button("Open tailcycle Dataset", row)) {
-                run_or_confirm_unsaved(ctx, [&win]() {
-                    tailcycle_open_browse(win.tailcycle_open);
-                });
-            }
-            ImGui::PopStyleVar();
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip(
-                    "Browse a tailcycle-dataset root and open one of its\n"
-                    "sessions. Brings its own cameras and skeleton.");
+                "ChooseProject", "Open Project",
+                "Red Project{.redproj}", cfg);
         }
     }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    // Annotate section
-    ImGui::TextColored(ImVec4(0.8f, 0.6f, 0.6f, 1.0f), "Annotate");
-    ImGui::Spacing();
-
-    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0, 0.5f));
-    if (ImGui::Button("New Project", ImVec2(-1, 0))) {
-        win.annotation.open();
-    }
-    if (ImGui::Button("Open Project", ImVec2(-1, 0))) {
-        IGFD::FileDialogConfig cfg;
-        cfg.countSelectionMax = 1;
-        cfg.path = default_project_root(ctx.user_settings, ctx.default_dir);
-        cfg.flags = ImGuiFileDialogFlags_Modal;
-        ImGuiFileDialog::Instance()->OpenDialog(
-            "ChooseProject", "Open Project",
-            "Red Project{.redproj}", cfg);
-    }
-    ImGui::PopStyleVar();
 
     // Recent Projects section
     if (!ctx.user_settings.recent_projects.empty()) {
         ImGui::Spacing();
-        ImGui::Separator();
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Recent Projects");
+        ImGui::TextDisabled("Recent Projects");
         ImGui::Spacing();
 
         // Each row is one button; while it is hovered an x shows at its
@@ -187,16 +141,54 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
         }
     }
 
+    // Secondary, as quiet links on one line: just looking at videos, a
+    // tailcycle session (it brings its own cameras and skeleton), and help.
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
-
-    // Help
-    float avail = ImGui::GetContentRegionAvail().x;
-    float btn_w = 160.0f;
-    ImGui::SetCursorPosX((avail - btn_w) * 0.5f);
-    if (ImGui::Button("Help & Tutorials", ImVec2(btn_w, 0))) {
-        win.show_help = true;
+    {
+        std::vector<const char *> links = {"Open Videos"};
+        if (TailcycleImport::available()) links.push_back("Open tailcycle Dataset");
+        links.push_back("Help");
+        const char *sep = "  \xC2\xB7  ";   // a middle dot between them
+        float w = 0;
+        for (size_t i = 0; i < links.size(); ++i)
+            w += ImGui::CalcTextSize(links[i]).x + (i ? ImGui::CalcTextSize(sep).x : 0);
+        ImGui::SetCursorPosX((avail_w - w) * 0.5f + ImGui::GetStyle().WindowPadding.x);
+        for (size_t i = 0; i < links.size(); ++i) {
+            if (i) {
+                ImGui::SameLine(0, 0);
+                ImGui::TextDisabled("%s", sep);
+                ImGui::SameLine(0, 0);
+            }
+            const std::string what = links[i];
+            if (ImGui::TextLink(links[i])) {
+                if (what == "Open Videos") {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.countSelectionMax = 0;
+                    cfg.path = media_browse_dir(ctx);
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseMedia", "Select Video(s)", video_ext_filter(), cfg);
+                } else if (what == "Help") {
+                    win.show_help = true;
+                } else {
+                    run_or_confirm_unsaved(ctx, [&win]() {
+                        tailcycle_open_browse(win.tailcycle_open);
+                    });
+                }
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+                if (what == "Open Videos")
+                    ImGui::SetTooltip("Play videos without a project.");
+                else if (what == "Help")
+                    ImGui::SetTooltip("Red Help: workflows, tools and shortcuts.");
+                else
+                    ImGui::SetTooltip("Browse a tailcycle-dataset root and open one "
+                                      "of its\nsessions. Brings its own cameras and "
+                                      "skeleton.");
+            }
+        }
     }
 
     ImGui::EndDisabled(); // matches BeginDisabled(just_appeared)
