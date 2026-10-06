@@ -996,6 +996,37 @@ static void test_reprojection_error_colors() {
     EXPECT_TRUE(is(c[3], 0.6f, 0.6f));    // grey
 }
 
+static void test_bbox_ui_drag_corner() {
+    printf("  test_bbox_ui_drag_corner...\n");
+    using namespace bbox_ui;
+    Headless ui;
+    BBoxToolState st;
+    LabelInfo info;
+    AnnotationMap amap = one_box();   // plot x 100..300, y 100..300
+    int active = 0;
+    auto input = [&] { bbox_handle_input(st, info, amap, 0, 0, active, 1, 1, kW, kH); };
+    auto &e = amap[0][0].cameras[0].get_extras();
+    // Bottom-right corner (plot y is up: bottom is y = 100).
+    // 7 px in from the corner on both axes: outside a side's 5 px, inside the
+    // corner's 10.
+    ImVec2 c0 = px(st, 300, 100);
+    c0.x -= 7; c0.y -= 7;
+    const ImVec2 c1 = px(st, 350, 60);
+    frame(st, c0, false, false, input);
+    frame(st, c0, false, false, input);
+    EXPECT_TRUE(st.edge_mask == (kEdgeR | kEdgeB));
+    frame(st, c0, true, false, input);
+    frame(st, c1, true, false, input);
+    frame(st, c1, false, false, input);
+    // The edges move with the pointer, keeping where it grabbed them: the
+    // corner ends 7 px off the pointer, as it started.
+    const ImVec2 corner_px = px(st, e.bbox_x + e.bbox_w, kH - e.bbox_y - e.bbox_h);
+    EXPECT_NEAR(corner_px.x, (c1.x + 7), 1.0);                  // right moved
+    EXPECT_NEAR(corner_px.y, (c1.y + 7), 1.0);                  // bottom moved
+    EXPECT_NEAR(e.bbox_x, 100, 1e-6);                           // left unchanged
+    EXPECT_NEAR((kH - e.bbox_y), 300, 1e-6);                    // top unchanged
+}
+
 int main() {
     test_current_date_time();
 
@@ -1012,6 +1043,7 @@ int main() {
     test_bbox_ui_draw_over_box();
     test_bbox_ui_drag_edge_and_label();
     test_bbox_ui_right_click_menu();
+    test_bbox_ui_drag_corner();
     test_reprojection_error_colors();
 
     // Transport bar + UI overhaul tests

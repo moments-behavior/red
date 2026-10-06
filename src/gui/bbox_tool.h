@@ -45,7 +45,10 @@ struct BBoxToolState {
     int edge_cam = -1;
     int edge_instance = -1;
     bool resizing = false;      // dragging edge_mask's edges
-    double grab_dx = 0, grab_dy = 0;   // kEdgeMove: pointer to the box's top-left
+    // Pointer minus the grabbed edge(s) at the press, so they move with the
+    // pointer rather than jumping to it (kEdgeMove: pointer minus the box's
+    // left, and its top minus the pointer).
+    double grab_dx = 0, grab_dy = 0;
 
     // Right-click menu on a box: which camera, frame and instance it is for.
     bool open_menu = false;     // open it this frame (in that camera's plot)
@@ -391,10 +394,10 @@ inline void bbox_handle_input(BBoxToolState &state,
             b = t - h;
             m = kEdgeMove;
         }
-        if (m & kEdgeL) l = mx;
-        if (m & kEdgeR) r = mx;
-        if (m & kEdgeB) b = my;
-        if (m & kEdgeT) t = my;
+        if (m & kEdgeL) l = mx - state.grab_dx;
+        if (m & kEdgeR) r = mx - state.grab_dx;
+        if (m & kEdgeB) b = my - state.grab_dy;
+        if (m & kEdgeT) t = my - state.grab_dy;
         // Dragged past the opposite edge: carry on as that edge.
         if (l > r) { std::swap(l, r); if (m & (kEdgeL | kEdgeR)) m ^= kEdgeL | kEdgeR; }
         if (b > t) { std::swap(b, t); if (m & (kEdgeT | kEdgeB)) m ^= kEdgeT | kEdgeB; }
@@ -418,7 +421,7 @@ inline void bbox_handle_input(BBoxToolState &state,
         auto it = amap.find(frame);
         if (it != amap.end()) {
             const ImVec2 mp = ImGui::GetIO().MousePos;
-            const float tol = 5.0f;
+            const float tol = 5.0f, corner_tol = 10.0f;
             double best_area = 0;
             for (size_t inst = 0; inst < it->second.size(); ++inst) {
                 const auto &fa = it->second[inst];
@@ -428,14 +431,27 @@ inline void bbox_handle_input(BBoxToolState &state,
                 const ImVec2 tl = ImPlot::PlotToPixels(e.bbox_x, img_h - e.bbox_y);
                 const ImVec2 br = ImPlot::PlotToPixels(e.bbox_x + e.bbox_w,
                                                        img_h - e.bbox_y - e.bbox_h);
-                if (mp.x < tl.x - tol || mp.x > br.x + tol || mp.y < tl.y - tol ||
-                    mp.y > br.y + tol)
+                if (mp.x < tl.x - corner_tol || mp.x > br.x + corner_tol ||
+                    mp.y < tl.y - corner_tol || mp.y > br.y + corner_tol)
                     continue;
+                // Near a corner (a wider zone, so it is easy to grab): both
+                // its edges. Else a side, within tol of it.
+                const int vx = std::fabs(mp.x - tl.x) <= corner_tol ? kEdgeL
+                             : std::fabs(mp.x - br.x) <= corner_tol ? kEdgeR : 0;
+                const int hy = std::fabs(mp.y - tl.y) <= corner_tol ? kEdgeT
+                             : std::fabs(mp.y - br.y) <= corner_tol ? kEdgeB : 0;
                 int mask = 0;
-                if (std::fabs(mp.x - tl.x) <= tol) mask |= kEdgeL;
-                else if (std::fabs(mp.x - br.x) <= tol) mask |= kEdgeR;
-                if (std::fabs(mp.y - tl.y) <= tol) mask |= kEdgeT;
-                else if (std::fabs(mp.y - br.y) <= tol) mask |= kEdgeB;
+                if (vx && hy) {
+                    mask = vx | hy;
+                } else {
+                    if (mp.x < tl.x - tol || mp.x > br.x + tol || mp.y < tl.y - tol ||
+                        mp.y > br.y + tol)
+                        continue;
+                    if (std::fabs(mp.x - tl.x) <= tol) mask |= kEdgeL;
+                    else if (std::fabs(mp.x - br.x) <= tol) mask |= kEdgeR;
+                    if (std::fabs(mp.y - tl.y) <= tol) mask |= kEdgeT;
+                    else if (std::fabs(mp.y - br.y) <= tol) mask |= kEdgeB;
+                }
                 // The label moves the box whole; it wins over the edges.
                 if (state.show_ids) {
                     const ImPlotPoint a = box_label_anchor(e.bbox_x, img_h - e.bbox_y);
@@ -463,8 +479,16 @@ inline void bbox_handle_input(BBoxToolState &state,
                 active_instance = state.edge_instance;   // the box being shaped
                 const auto &e = *it->second[(size_t)state.edge_instance]
                                      .cameras[cam_idx].extras;
-                state.grab_dx = mx - e.bbox_x;              // pointer - left
-                state.grab_dy = (img_h - e.bbox_y) - my;    // top - pointer
+                const double left = e.bbox_x, right = e.bbox_x + e.bbox_w;
+                const double top = img_h - e.bbox_y, bottom = top - e.bbox_h;
+                const int m = state.edge_mask;
+                if (m & kEdgeMove) {
+                    state.grab_dx = mx - left;     // pointer - left
+                    state.grab_dy = top - my;      // top - pointer
+                } else {
+                    state.grab_dx = mx - (m & kEdgeL ? left : right);
+                    state.grab_dy = my - (m & kEdgeT ? top : bottom);
+                }
                 return;
             }
         }
