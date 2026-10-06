@@ -1067,6 +1067,23 @@ static void test_bbox_ui_first_box_copies_instances() {
     frame(st, b, false, true, input2);
     EXPECT_TRUE(amap[2].size() == 2 && find_instance(amap[2], 1) &&
                 find_instance(amap[2], 1)->cameras[0].has_bbox());
+
+    // A frame already labelled with #0 alone (from before #1 existed): a box
+    // there tops it up with #1, keeping #0's box and its place.
+    {
+        auto &e = get_or_create_frame(amap, 3, 1, 1, 0).cameras[0].get_extras();
+        e.bbox_x = 500; e.bbox_y = 10; e.bbox_w = 40; e.bbox_h = 40; e.has_bbox = true;
+    }
+    active = 1;
+    auto input3 = [&] { bbox_handle_input(st, info, amap, 3, 0, active, 1, 1, kW, kH); };
+    frame(st, a, false, true, input3);
+    frame(st, a, false, true, input3);
+    frame(st, a, true, true, input3);
+    frame(st, b, true, true, input3);
+    frame(st, b, false, true, input3);
+    EXPECT_TRUE(amap[3].size() >= 2 && amap[3][0].instance_id == 0 &&
+                amap[3][0].cameras[0].has_bbox() && find_instance(amap[3], 1) &&
+                find_instance(amap[3], 1)->cameras[0].has_bbox());
 }
 
 int main() {

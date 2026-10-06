@@ -521,16 +521,14 @@ inline std::vector<std::pair<int, int>> instance_roster(const AnnotationMap &ama
     return out;
 }
 
-// Start a frame with every instance in the project (instance_roster), all
-// unlabelled here -- else just instance 0. Labelling five animals then moving
-// on keeps five, at the same places in the list, even past a frame where one
-// was out of view. A frame with real labels is returned as it is; one with
-// only empty instances (saved from an earlier visit) is topped up with the
-// animals it lacks, keeping those it has.
+// Give a frame every instance in the project (instance_roster): the ones it
+// lacks are added, empty, after those it has -- whose labels and order are
+// kept, so the one being edited stays at its place. A new frame gets them
+// all; with no labels anywhere, just instance 0. Labelling five animals then
+// moving on keeps five, even past a frame where one was out of view, and a
+// frame labelled before an animal joined gets it too.
 inline FrameInstances &create_frame_instances(AnnotationMap &amap, u32 frame,
                                               int num_nodes, int num_cameras) {
-    auto here = amap.find(frame);
-    if (here != amap.end() && any_instance_has_labels(here->second)) return here->second;
     std::vector<std::pair<int, int>> ids = instance_roster(amap);
     if (ids.empty()) ids.push_back({0, 0});
     FrameInstances &fis = amap[frame];

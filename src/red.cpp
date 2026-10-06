@@ -1427,12 +1427,9 @@ int main(int argc, char **argv) {
                                 }
                                 if (keys::pressed(keys::Sc::CreateFrame)) {
                                     // create frame annotation
-                                    // With the instances of the nearest labelled
-                                    // frame -- also on a frame of only empty
-                                    // instances (saved from an earlier visit).
-                                    if (!keypoints_find ||
-                                        !any_instance_has_labels(
-                                            annotations.at(current_frame_num))) {
+                                    // Every instance in the project: a new frame
+                                    // gets them all, any other the ones it lacks.
+                                    {
                                         create_frame_instances(annotations,
                                             current_frame_num,
                                             skeleton.num_nodes,

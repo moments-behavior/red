@@ -173,17 +173,16 @@ template <typename HasBox>
 inline FrameAnnotation &box_target(AnnotationMap &amap, u32 frame, int cam_idx,
                                    int &active_instance, int num_nodes,
                                    int num_cameras, HasBox has) {
-    auto it = amap.find(frame);
-    if (it == amap.end() || !any_instance_has_labels(it->second)) {
-        // A new frame (or one of only empty instances) starts with the
-        // nearest labelled frame's instances; the box goes on the one being
-        // edited (same place in the list), else the first.
-        FrameInstances &fis =
-            create_frame_instances(amap, frame, num_nodes, num_cameras);
+    // Every instance in the project is on the frame (missing ones added,
+    // empty); a frame that had none starts with them all.
+    const bool was_unlabelled = amap.find(frame) == amap.end() ||
+                                !any_instance_has_labels(amap.at(frame));
+    FrameInstances &fis = create_frame_instances(amap, frame, num_nodes, num_cameras);
+    if (was_unlabelled) {
+        // The box goes on the one being edited (same place in the list).
         if (active_instance < 0 || active_instance >= (int)fis.size()) active_instance = 0;
         return fis[(size_t)active_instance];
     }
-    FrameInstances &fis = it->second;
     if (active_instance < 0 || active_instance >= (int)fis.size()) active_instance = 0;
     FrameAnnotation &editing = fis[(size_t)active_instance];
     if (cam_idx >= (int)editing.cameras.size() || !has(editing.cameras[(size_t)cam_idx]))
