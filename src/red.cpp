@@ -1449,13 +1449,18 @@ int main(int argc, char **argv) {
                                         }
                                     }
 
-                                    if (keys::pressed(keys::Sc::NextInstance)) {
+                                    // X / Z: next / previous instance.
+                                    const int inst_step =
+                                        keys::pressed(keys::Sc::NextInstance) ? 1
+                                        : keys::pressed(keys::Sc::PrevInstance) ? -1
+                                                                                : 0;
+                                    if (inst_step) {
                                         auto &fis =
                                             annotations.at(current_frame_num);
-                                        if (!fis.empty())
+                                        const int n = (int)fis.size();
+                                        if (n > 0)
                                             active_instance =
-                                                (active_instance + 1) %
-                                                (int)fis.size();
+                                                ((active_instance + inst_step) % n + n) % n;
                                     }
 
                                     if (keys::pressed(keys::Sc::ActivePrev)) {
