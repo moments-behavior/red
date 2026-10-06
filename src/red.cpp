@@ -1294,10 +1294,13 @@ int main(int argc, char **argv) {
                                               ImPlotFlags_Crosshairs |
                                               ImPlotFlags_NoMenus)) {
                         // Shift+drag draws a bbox; the image holds still.
-                        if (bbox_blocks_pan(win.bbox))
-                            ImPlot::SetupAxes(nullptr, nullptr,
-                                              ImPlotAxisFlags_Lock,
-                                              ImPlotAxisFlags_Lock);
+                        // Set every frame: ImPlot keeps an axis's flags until
+                        // they are set again, so a lock set only while drawing
+                        // stayed on and stopped zoom and pan for good.
+                        const ImPlotAxisFlags lock =
+                            bbox_blocks_pan(win.bbox) ? ImPlotAxisFlags_Lock
+                                                      : ImPlotAxisFlags_None;
+                        ImPlot::SetupAxes(nullptr, nullptr, lock, lock);
                         ImPlot::SetupAxisLimits(
                             ImAxis_X1, 0, scene->image_width[j],
                             ImPlotCond_Once);
