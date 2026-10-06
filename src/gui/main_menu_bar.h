@@ -5,6 +5,7 @@
 #include "IconsForkAwesome.h"
 #include "tailcycle_import.h"
 #include "gui/tailcycle_open_window.h"
+#include "gui/folder_dialog.h"
 #include <ImGuiFileDialog.h>
 
 inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
@@ -150,9 +151,8 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             config.path = !pm.timestamps_folder.empty() ? pm.timestamps_folder
                                                         : pm.media_folder;
             config.flags = ImGuiFileDialogFlags_Modal;
-            ImGuiFileDialog::Instance()->OpenDialog(
-                "ChooseProjectTimestamps", "Select Camera Timestamps Folder",
-                nullptr, config);
+            open_folder_dialog("ChooseProjectTimestamps", "Select Camera Timestamps Folder",
+                               timestamps_folder_kind(), config);
         }
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort |

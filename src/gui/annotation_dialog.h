@@ -2,6 +2,7 @@
 #include "imgui.h"
 #include "app_context.h"
 #include "gui/panel.h"
+#include "gui/folder_dialog.h"
 #include <ImGuiFileDialog.h>
 #include <misc/cpp/imgui_stdlib.h>
 #include <algorithm>
@@ -58,7 +59,7 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
             ? ctx.default_dir
             : ctx.user_settings.default_media_root_path;
     // File dialog handlers (run every frame, even when window is hidden)
-    if (ImGuiFileDialog::Instance()->Display("ChooseAnnotVideoDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+    if (display_folder_dialog("ChooseAnnotVideoDir")) {
         if (ImGuiFileDialog::Instance()->IsOk()) {
             std::filesystem::path chosen(
                 ImGuiFileDialog::Instance()->GetCurrentPath());
@@ -81,12 +82,12 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
         }
         ImGuiFileDialog::Instance()->Close();
     }
-    if (ImGuiFileDialog::Instance()->Display("ChooseAnnotCalib", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+    if (display_folder_dialog("ChooseAnnotCalib")) {
         if (ImGuiFileDialog::Instance()->IsOk())
             pm.calibration_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
         ImGuiFileDialog::Instance()->Close();
     }
-    if (ImGuiFileDialog::Instance()->Display("ChooseAnnotTimestamps", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+    if (display_folder_dialog("ChooseAnnotTimestamps")) {
         if (ImGuiFileDialog::Instance()->IsOk())
             pm.timestamps_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
         ImGuiFileDialog::Instance()->Close();
@@ -199,8 +200,8 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
                 cfg.countSelectionMax = 1;
                 cfg.path = state.media_folder;
                 cfg.flags = ImGuiFileDialogFlags_Modal;
-                ImGuiFileDialog::Instance()->OpenDialog(
-                    "ChooseAnnotVideoDir", "Choose Media Folder", nullptr, cfg);
+                open_folder_dialog("ChooseAnnotVideoDir", "Choose Media Folder",
+                                   media_folder_kind(), cfg);
             }
 
             // ---- Cameras Found (checkboxes) ----
@@ -363,8 +364,8 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
                                    ? default_browse_path
                                    : state.media_folder;
                     cfg.flags = ImGuiFileDialogFlags_Modal;
-                    ImGuiFileDialog::Instance()->OpenDialog(
-                        "ChooseAnnotCalib", "Select Calibration Folder", nullptr, cfg);
+                    open_folder_dialog("ChooseAnnotCalib", "Select Calibration Folder",
+                                       calibration_folder_kind(), cfg);
                 }
                 }
 
@@ -394,9 +395,8 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
                                    ? default_browse_path
                                    : state.media_folder;
                     cfg.flags = ImGuiFileDialogFlags_Modal;
-                    ImGuiFileDialog::Instance()->OpenDialog(
-                        "ChooseAnnotTimestamps", "Select Camera Timestamps Folder",
-                        nullptr, cfg);
+                    open_folder_dialog("ChooseAnnotTimestamps", "Select Camera Timestamps Folder",
+                                       timestamps_folder_kind(), cfg);
                 }
                 } else {
                     pm.timestamps_folder.clear();

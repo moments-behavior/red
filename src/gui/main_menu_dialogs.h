@@ -3,6 +3,7 @@
 #include "app_context.h"
 #include "gui/tailcycle_open_window.h"
 #include "gui/window_states.h"
+#include "gui/folder_dialog.h"
 #include <ImGuiFileDialog.h>
 #include <filesystem>
 
@@ -299,9 +300,7 @@ inline void HandleMainMenuDialogs(
     // project with it. The decoders take their camera timings when the videos
     // load, so the folder only applies on a reload -- and reopening goes
     // through close_project(), which saves the labels first.
-    if (ImGuiFileDialog::Instance()->Display("ChooseProjectTimestamps",
-                                             ImGuiWindowFlags_NoCollapse,
-                                             ImVec2(680, 440))) {
+    if (display_folder_dialog("ChooseProjectTimestamps")) {
         if (ImGuiFileDialog::Instance()->IsOk()) {
             win.timestamps_pending = ImGuiFileDialog::Instance()->GetCurrentPath();
             win.timestamps_confirm = true;
