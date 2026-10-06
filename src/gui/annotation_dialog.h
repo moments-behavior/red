@@ -299,33 +299,30 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "ChooseAnnotSkeleton", "Choose Skeleton", ".json", config);
                     }
-                    // Draw a new one; saving it there picks it here.
-                    ImGui::SameLine(0.0f, gap);
-                    if (ImGui::Button(ntxt))
-                        state.skeleton_wait = open_skeleton_creator_for(ctx);
-                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-                        ImGui::SetTooltip("Draw a new skeleton in the Skeleton Creator; "
-                                          "saving it there picks it here.");
                     ImGui::PopID();
                 } else {
                     ImGui::BeginDisabled(annot_skel_labels.empty());
-                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    ImGui::SetNextItemWidth(
+                        ImMax(50.0f, ImGui::GetContentRegionAvail().x - new_w - gap));
                     ImGui::Combo("##annot_skeleton_preset", &annot_skeleton_idx,
                                  annot_skel_labels.data(), (int)annot_skel_labels.size());
                     ImGui::EndDisabled();
                 }
+                // Always there: draw a new skeleton. It is a file, so this
+                // goes to File, where the saved skeleton is filled in.
+                ImGui::SameLine(0.0f, gap);
+                if (ImGui::Button(ntxt)) {
+                    state.skeleton_wait = open_skeleton_creator_for(ctx);
+                    pm.load_skeleton_from_json = true;
+                    pm.skeleton_name.clear();
+                }
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                    ImGui::SetTooltip("Draw a new skeleton in the Skeleton Creator; "
+                                      "saving it there picks it here.");
             }
             ImGui::TableSetColumnIndex(2);
-            // File / Preset, and a third entry so drawing a new one is found
-            // from either: it opens the Skeleton Creator and goes to File,
-            // where the saved skeleton lands.
             ImGui::SetNextItemWidth(90.0f);
-            if (ImGui::Combo("##annot_skel_mode", &skel_mode,
-                             "File\0Preset\0New skeleton...\0")) {
-                if (skel_mode == 2) {
-                    state.skeleton_wait = open_skeleton_creator_for(ctx);
-                    skel_mode = 0;
-                }
+            if (ImGui::Combo("##annot_skel_mode", &skel_mode, "File\0Preset\0")) {
                 pm.load_skeleton_from_json = (skel_mode == 0);
                 if (pm.load_skeleton_from_json)
                     pm.skeleton_name.clear();
