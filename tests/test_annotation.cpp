@@ -713,7 +713,7 @@ static void test_bbox_classes_and_target() {
 
     // The first box of a project with no classes makes Class_0.
     BBoxToolState state;
-    BoxClasses classes;
+    LabelInfo classes;
     EXPECT_EQ(box_class_for_new(state, classes), 0);
     EXPECT_EQ((int)classes.names.size(), 1);
     EXPECT_TRUE(classes.names[0] == "Class_0");
@@ -743,7 +743,7 @@ static void test_annotation_config_defaults() {
     EXPECT_TRUE(cfg.enable_keypoints);
     EXPECT_FALSE(cfg.enable_bboxes);
     EXPECT_FALSE(cfg.enable_obbs);
-    EXPECT_TRUE(cfg.box_classes.names.empty());   // the first box adds Class_0
+    EXPECT_TRUE(cfg.label_info.names.empty());   // the first box adds Class_0
 }
 
 static void test_annotation_config_json_roundtrip() {
@@ -752,7 +752,7 @@ static void test_annotation_config_json_roundtrip() {
     AnnotationConfig cfg;
     cfg.enable_bboxes = true;
     cfg.enable_obbs = true;
-    cfg.box_classes.names = {"rat", "mouse", "fly"};
+    cfg.label_info.names = {"rat", "mouse", "fly"};
 
     nlohmann::json j;
     to_json(j, cfg);
@@ -765,17 +765,17 @@ static void test_annotation_config_json_roundtrip() {
     EXPECT_TRUE(cfg2.enable_obbs);
     // Box classes are saved with the labels, not the project file ...
     EXPECT_FALSE(j.contains("class_names"));
-    EXPECT_TRUE(cfg2.box_classes.names.empty());
+    EXPECT_TRUE(cfg2.label_info.names.empty());
     // ... but an older project's are still read.
     j["class_names"] = {"rat", "mouse"};
     AnnotationConfig cfg3;
     from_json(j, cfg3);
-    EXPECT_EQ((int)cfg3.box_classes.names.size(), 2);
+    EXPECT_EQ((int)cfg3.label_info.names.size(), 2);
     // The old automatic default is not a class anyone chose.
     j["class_names"] = {"animal"};
     AnnotationConfig cfg4;
     from_json(j, cfg4);
-    EXPECT_TRUE(cfg4.box_classes.names.empty());
+    EXPECT_TRUE(cfg4.label_info.names.empty());
 }
 
 // Box class names round-trip through annotations.json with the boxes.
@@ -791,14 +791,14 @@ static void test_annotations_json_class_names() {
     fa.category_id = 1;
     auto &e = fa.cameras[0].get_extras();
     e.bbox_x = 1; e.bbox_y = 2; e.bbox_w = 30; e.bbox_h = 40; e.has_bbox = true;
-    BoxClasses classes;
+    LabelInfo classes;
     classes.names = {"Class_0", "rat"};
     classes.colors = {{-1.f, -1.f, -1.f}, {0.5f, 0.25f, 1.0f}};   // rat's picked
     EXPECT_TRUE(save_annotations_json(amap, dir.string(), &classes));
 
     AnnotationMap back;
     get_or_create_frame(back, 3, 2, 1, 4);   // as the CSV loader would
-    BoxClasses loaded;
+    LabelInfo loaded;
     loaded.names = {"old"};
     EXPECT_TRUE(load_annotations_json(back, dir.string(), &loaded));
     EXPECT_TRUE(loaded.names == classes.names);
@@ -807,8 +807,21 @@ static void test_annotations_json_class_names() {
     EXPECT_EQ(back[3].front().category_id, 1);
     EXPECT_TRUE(back[3].front().cameras[0].has_bbox());
 
+    // Instance names and colours, by id.
+    classes.instances[4].name = "Alice";
+    classes.instances[7].color = {0.1f, 0.2f, 0.3f};
+    classes.instances[9] = InstanceInfo{};   // nothing set: not written
+    EXPECT_TRUE(save_annotations_json(amap, dir.string(), &classes));
+    LabelInfo again;
+    EXPECT_TRUE(load_annotations_json(back, dir.string(), &again));
+    EXPECT_TRUE(again.instance_name(4) == "Alice");
+    EXPECT_TRUE(again.instance_name(5) == "#5");
+    EXPECT_TRUE(again.instances.count(7) && again.instances[7].has_color() &&
+                again.instances[7].color[2] == 0.3f);
+    EXPECT_FALSE(again.instances.count(9));
+
     // A file without categories leaves the caller's list alone.
-    BoxClasses kept;
+    LabelInfo kept;
     kept.names = {"animal"};
     EXPECT_TRUE(save_annotations_json(amap, dir.string()));
     EXPECT_TRUE(load_annotations_json(back, dir.string(), &kept));
@@ -831,7 +844,7 @@ static void test_annotation_config_backward_compat() {
     // Should have defaults
     EXPECT_TRUE(cfg.enable_keypoints);
     EXPECT_FALSE(cfg.enable_bboxes);
-    EXPECT_TRUE(cfg.box_classes.names.empty());
+    EXPECT_TRUE(cfg.label_info.names.empty());
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

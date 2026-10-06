@@ -274,16 +274,34 @@ struct FrameAnnotation {
     std::vector<CameraAnnotation> cameras; // [num_cameras]
 };
 
-// ── Box classes ──
-// The Bbox tool's classes, by number (FrameAnnotation::category_id): names,
-// and colours where the user picked one. Saved with the boxes in
-// annotations.json ("categories", "category_colors").
-struct BoxClasses {
-    std::vector<std::string> names;
+// ── Names and colours for the labels ──
+// What the user called things, saved with the boxes in annotations.json:
+//   - box classes, by number (FrameAnnotation::category_id): names, and
+//     colours where one was picked ("categories", "category_colors");
+//   - instances, by id (FrameAnnotation::instance_id): a name and/or a
+//     picked colour ("instances").
+struct InstanceInfo {
+    std::string name;                          // empty: shown as "#<id>"
+    std::array<float, 3> color{-1.f, -1.f, -1.f};   // [0] < 0: not picked
+    bool has_color() const { return color[0] >= 0; }
+    bool empty() const { return name.empty() && !has_color(); }
+};
+struct LabelInfo {
+    std::vector<std::string> names;            // box classes
     // Parallel to names; may be shorter. {-1,...} or missing = the default
     // colour for that class number.
     std::vector<std::array<float, 3>> colors;
     bool has_color(size_t i) const { return i < colors.size() && colors[i][0] >= 0; }
+
+    std::map<int, InstanceInfo> instances;     // by instance_id
+
+    // "#3", or the name given to instance 3.
+    std::string instance_name(int id) const {
+        auto it = instances.find(id);
+        return it != instances.end() && !it->second.name.empty()
+                   ? it->second.name
+                   : "#" + std::to_string(id);
+    }
 };
 
 // ── The main annotation container ──
@@ -730,7 +748,7 @@ inline void annotations_from_json(const nlohmann::json &root, AnnotationMap &ama
 
 // Save extended annotations to a JSON file alongside keypoint CSVs
 inline bool save_annotations_json(const AnnotationMap &amap, const std::string &folder,
-                                  const BoxClasses *classes = nullptr) {
+                                  const LabelInfo *classes = nullptr) {
     auto j = annotations_to_json(amap);
     // The box classes, by number: what each record's category_id means. Kept
     // with the boxes so the labels say what they are on their own.
@@ -749,7 +767,19 @@ inline bool save_annotations_json(const AnnotationMap &amap, const std::string &
             j["category_colors"] = cols;   // [r,g,b] in 0..1, or null
         }
     }
-    if (j["frames"].empty() && !have_classes) return true; // nothing to save
+    // Instance names / colours, by id.
+    nlohmann::json insts = nlohmann::json::array();
+    if (classes)
+        for (const auto &[id, info] : classes->instances) {
+            if (info.empty()) continue;
+            nlohmann::json ji = {{"id", id}};
+            if (!info.name.empty()) ji["name"] = info.name;
+            if (info.has_color()) ji["color"] = info.color;
+            insts.push_back(ji);
+        }
+    if (!insts.empty()) j["instances"] = insts;
+    if (j["frames"].empty() && !have_classes && insts.empty())
+        return true; // nothing to save
     std::ofstream f(folder + "/annotations.json");
     if (!f) return false;
     f << j.dump(2);
@@ -760,7 +790,7 @@ inline bool save_annotations_json(const AnnotationMap &amap, const std::string &
 // classes, if given, gets the file's box classes -- left alone when the
 // file has none (labels from before they were kept here).
 inline bool load_annotations_json(AnnotationMap &amap, const std::string &folder,
-                                  BoxClasses *classes = nullptr) {
+                                  LabelInfo *classes = nullptr) {
     std::string path = folder + "/annotations.json";
     if (!std::filesystem::exists(path)) return true; // no extended data, ok
     try {
@@ -778,6 +808,19 @@ inline bool load_annotations_json(AnnotationMap &amap, const std::string &folder
                             ? std::array<float, 3>{c[0].get<float>(), c[1].get<float>(),
                                                    c[2].get<float>()}
                             : std::array<float, 3>{-1.f, -1.f, -1.f});
+        }
+        if (classes && j.contains("instances") && j["instances"].is_array()) {
+            classes->instances.clear();
+            for (const auto &ji : j["instances"]) {
+                if (!ji.contains("id")) continue;
+                InstanceInfo info;
+                info.name = ji.value("name", std::string{});
+                if (ji.contains("color") && ji["color"].is_array() &&
+                    ji["color"].size() == 3)
+                    info.color = {ji["color"][0].get<float>(), ji["color"][1].get<float>(),
+                                  ji["color"][2].get<float>()};
+                classes->instances[ji["id"].get<int>()] = info;
+            }
         }
         return true;
     } catch (...) {

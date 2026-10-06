@@ -103,7 +103,7 @@ inline bool obb_contains(double cx, double cy, double w, double h,
 
 // Draw OBB overlays on a camera's ImPlot view: every instance's.
 inline void obb_draw_overlays(OBBToolState &state, const BBoxToolState &bbox_state,
-                               const BoxClasses &classes,
+                               const LabelInfo &classes,
                                const AnnotationMap &amap, u32 frame,
                                int cam_idx, int img_w, int img_h) {
     (void)img_w;
@@ -121,7 +121,7 @@ inline void obb_draw_overlays(OBBToolState &state, const BBoxToolState &bbox_sta
             double angle = -cam.extras->obb_angle; // flip angle for Y inversion
 
             int ci = fa.category_id;
-            ImVec4 color = box_draw_color(classes, ci, (int)inst);
+            ImVec4 color = box_draw_color(classes, ci, fa.instance_id, (int)inst);
             if (!state.hovered || cam_idx != state.hovered_cam ||
                 (int)inst != state.hovered_instance)
                 color.w *= 0.6f;
@@ -194,7 +194,7 @@ inline void obb_draw_overlays(OBBToolState &state, const BBoxToolState &bbox_sta
 
 // Handle OBB input on a focused camera view
 inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
-                              BoxClasses &classes,
+                              LabelInfo &classes,
                               AnnotationMap &amap, u32 frame, int cam_idx,
                               int active_instance, int num_nodes, int num_cameras,
                               int img_w, int img_h) {

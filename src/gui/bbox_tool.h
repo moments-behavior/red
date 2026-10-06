@@ -5,7 +5,7 @@
 // stored in the unified AnnotationMap (CameraAnnotation extras), on the
 // instance being edited, which takes the box's class (YOLO needs one per box;
 // ids stay unique across classes, so the CSVs need no class column). The class list is
-// pm.annotation_config.box_classes, saved with the labels (annotations.json).
+// pm.annotation_config.label_info, saved with the labels (annotations.json).
 
 #include "imgui.h"
 #include "implot.h"
@@ -50,7 +50,7 @@ inline ImVec4 default_box_class_color(int i) {
 }
 
 // A class's colour: the one picked for it, else its default.
-inline ImVec4 box_class_color(const BoxClasses &classes, int i) {
+inline ImVec4 box_class_color(const LabelInfo &classes, int i) {
     if (i >= 0 && classes.has_color((size_t)i)) {
         const auto &c = classes.colors[(size_t)i];
         return ImVec4(c[0], c[1], c[2], 1.0f);
@@ -58,18 +58,34 @@ inline ImVec4 box_class_color(const BoxClasses &classes, int i) {
     return default_box_class_color(i);
 }
 
-// The colour a box is drawn in: with one class, its instance's (as on the
-// Instances buttons) so instances tell apart; with several, its class's.
+// The colour a box is drawn in: with one class, its instance's (as in the
+// Instances list) so instances tell apart; with several, its class's.
 // inst_index is the instance's place in the frame's list.
-inline ImVec4 box_draw_color(const BoxClasses &classes, int category, int inst_index) {
-    return classes.names.size() > 1 ? box_class_color(classes, category)
-                                    : instance_tint(inst_index);
+inline ImVec4 box_draw_color(const LabelInfo &classes, int category,
+                             int instance_id, int inst_index) {
+    return classes.names.size() > 1
+               ? box_class_color(classes, category)
+               : instance_color(classes, instance_id, inst_index);
 }
 
-// A box's label: "#1", or "rat #1" once there is more than one class to tell
-// apart.
-inline std::string box_label(const BoxClasses &classes, const FrameAnnotation &fa) {
-    std::string s = "#" + std::to_string(fa.instance_id);
+// The colour of a box about to be drawn: the selected class's, or with one
+// class the colour of the instance being edited.
+inline ImVec4 new_box_color(const BBoxToolState &state, const LabelInfo &classes,
+                            const AnnotationMap &amap, u32 frame,
+                            int active_instance) {
+    auto it = amap.find(frame);
+    if (it == amap.end() || it->second.empty())
+        return box_draw_color(classes, state.current_class, 0, 0);
+    const int idx = active_instance > 0 && active_instance < (int)it->second.size()
+                        ? active_instance : 0;
+    return box_draw_color(classes, state.current_class,
+                          it->second[(size_t)idx].instance_id, idx);
+}
+
+// A box's label: the instance's name ("#1" until named), and its class once
+// there is more than one to tell apart ("rat #1").
+inline std::string box_label(const LabelInfo &classes, const FrameAnnotation &fa) {
+    std::string s = classes.instance_name(fa.instance_id);
     if (classes.names.size() > 1) {
         const int ci = fa.category_id;
         s = (ci >= 0 && ci < (int)classes.names.size() ? classes.names[(size_t)ci]
@@ -80,14 +96,14 @@ inline std::string box_label(const BoxClasses &classes, const FrameAnnotation &f
 }
 
 // Adds Class_<n>, n its index, to the list and makes it current.
-inline void add_box_class(BBoxToolState &state, BoxClasses &classes) {
+inline void add_box_class(BBoxToolState &state, LabelInfo &classes) {
     state.current_class = (int)classes.names.size();
     classes.names.push_back("Class_" + std::to_string(classes.names.size()));
 }
 
 // The class a new box gets: the current one, after making Class_0 if the list
 // is empty (a new project's is).
-inline int box_class_for_new(BBoxToolState &state, BoxClasses &classes) {
+inline int box_class_for_new(BBoxToolState &state, LabelInfo &classes) {
     if (classes.names.empty()) add_box_class(state, classes);
     state.current_class = std::clamp(state.current_class, 0, (int)classes.names.size() - 1);
     return state.current_class;
@@ -114,7 +130,7 @@ inline bool box_key(ImGuiKey k) {
 
 // Draw bbox rectangles on a camera's ImPlot view: every instance's.
 inline void bbox_draw_overlays(const BBoxToolState &state,
-                               const BoxClasses &classes,
+                               const LabelInfo &classes,
                                const AnnotationMap &amap, u32 frame,
                                int cam_idx, int active_instance,
                                int img_w, int img_h) {
@@ -126,7 +142,7 @@ inline void bbox_draw_overlays(const BBoxToolState &state,
         double dys[] = {state.start_y, state.start_y, mouse.y, mouse.y, state.start_y};
         ImPlotSpec nspec;
         nspec.LineColor =
-            box_draw_color(classes, state.current_class, active_instance);
+            new_box_color(state, classes, amap, frame, active_instance);
         ImPlot::PlotLine("##bbox_new", dxs, dys, 5, nspec);
     }
 
@@ -140,7 +156,7 @@ inline void bbox_draw_overlays(const BBoxToolState &state,
         if (!cam.has_bbox()) continue;
 
         const int ci = fa.category_id;
-        ImVec4 color = box_draw_color(classes, ci, (int)inst);
+        ImVec4 color = box_draw_color(classes, ci, fa.instance_id, (int)inst);
         const bool hot = state.hovered && cam_idx == state.hovered_cam &&
                          (int)inst == state.hovered_instance;
         if (!hot) color.w *= 0.6f;
@@ -180,8 +196,8 @@ inline bool bbox_blocks_pan(const BBoxToolState &state) {
 // ImPlot's "not allowed" cursor, which it shows for a drag on the views
 // bbox_blocks_pan locks. Call inside the camera's plot.
 inline void bbox_draw_cursor(const BBoxToolState &state,
-                             const BoxClasses &classes, int cam_idx,
-                             int active_instance) {
+                             const LabelInfo &classes, const AnnotationMap &amap,
+                             u32 frame, int cam_idx, int active_instance) {
     if (!state.enabled) return;
     const bool here = state.drawing ? cam_idx == state.drawing_cam
                                     : ImGui::GetIO().KeyShift && ImPlot::IsPlotHovered();
@@ -192,7 +208,7 @@ inline void bbox_draw_cursor(const BBoxToolState &state,
     const ImVec2 lo = ImPlot::GetPlotPos();
     const ImVec2 hi(lo.x + ImPlot::GetPlotSize().x, lo.y + ImPlot::GetPlotSize().y);
     const ImU32 col = ImGui::GetColorU32(
-        box_draw_color(classes, state.current_class, active_instance));
+        new_box_color(state, classes, amap, frame, active_instance));
     const ImU32 cross = IM_COL32(255, 255, 255, 150);
     dl->PushClipRect(lo, hi, true);
     dl->AddLine(ImVec2(lo.x, m.y), ImVec2(m.x - 5, m.y), cross);
@@ -208,7 +224,7 @@ inline void bbox_draw_cursor(const BBoxToolState &state,
 
 // Handle bbox input on a focused camera view. Where a box goes: box_target.
 inline void bbox_handle_input(BBoxToolState &state,
-                              BoxClasses &classes,
+                              LabelInfo &classes,
                               AnnotationMap &amap, u32 frame, int cam_idx,
                               int active_instance, int num_nodes,
                               int num_cameras, int img_w, int img_h) {
@@ -318,7 +334,7 @@ inline void bbox_handle_input(BBoxToolState &state,
 inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
     DrawPanel("Bbox Tool", state.show,
         [&]() {
-        auto &classes = ctx.pm.annotation_config.box_classes;
+        auto &classes = ctx.pm.annotation_config.label_info;
         ImGui::Checkbox("Enable Bbox Drawing", &state.enabled);
         ImGui::Checkbox("Show IDs", &state.show_ids);
 

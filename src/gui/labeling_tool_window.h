@@ -4,6 +4,7 @@
 #include "annotation.h"
 #include "annotation_csv.h"
 #include "gui/gui_keypoints.h"
+#include <misc/cpp/imgui_stdlib.h>
 #include "gui/keypoint_clipboard.h"
 #include "keypoints_table.h"
 #include "gui/shortcuts.h"
@@ -15,6 +16,8 @@
 #include <ctime>
 
 struct LabelingToolState {
+    int editing_instance = -1;     // instance id whose name is being edited
+    bool focus_instance_edit = false;
     std::time_t last_saved = static_cast<std::time_t>(-1);
     bool save_requested = false;
     bool timeline_reset_pending = false;
@@ -108,28 +111,63 @@ inline void DrawLabelingToolWindow(
             if (ctx.active_instance >= n) ctx.active_instance = 0;
 
             if (n > 1) {
+                // One row per instance: click to edit it, double-click the
+                // name to rename it, double-click the colour to pick one.
+                // Names and colours are kept by id (saved with the labels).
                 ImGui::SeparatorText("Instances");
+                auto &info = pm.annotation_config.label_info;
                 for (int i = 0; i < n; i++) {
-                    if (i) ImGui::SameLine();
-                    ImGui::PushID(i);
-                    const ImVec4 t = instance_tint(i);
-                    ImGui::PushStyleColor(ImGuiCol_Text, t);
-                    char lbl[16];
-                    snprintf(lbl, sizeof(lbl), "#%d", fit->second[(size_t)i].instance_id);
-                    if (ImGui::RadioButton(lbl, ctx.active_instance == i))
-                        ctx.active_instance = i;
-                    ImGui::PopStyleColor();
+                    const int id = fit->second[(size_t)i].instance_id;
+                    ImGui::PushID(id);
+                    ImVec4 col = instance_color(info, id, i);
+                    ImGui::ColorButton("##clr", col, ImGuiColorEditFlags_NoTooltip,
+                                       ImVec2(14, 14));
+                    if (ImGui::IsItemHovered() &&
+                        ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                        ImGui::OpenPopup("##pick_color");
+                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+                        ImGui::SetTooltip("Double-click to change the colour");
+                    if (ImGui::BeginPopup("##pick_color")) {
+                        if (ImGui::ColorPicker3("##picker", &col.x,
+                                                ImGuiColorEditFlags_NoSidePreview |
+                                                    ImGuiColorEditFlags_NoSmallPreview))
+                            info.instances[id].color = {col.x, col.y, col.z};
+                        if (ImGui::SmallButton("Default")) {
+                            info.instances[id].color = {-1.f, -1.f, -1.f};
+                            ImGui::CloseCurrentPopup();
+                        }
+                        ImGui::EndPopup();
+                    }
+                    ImGui::SameLine();
+                    if (state.editing_instance == id) {
+                        std::string &name = info.instances[id].name;
+                        ImGui::SetNextItemWidth(160);
+                        if (state.focus_instance_edit) {
+                            ImGui::SetKeyboardFocusHere();
+                            state.focus_instance_edit = false;
+                        }
+                        ImGui::InputTextWithHint("##name", ("#" + std::to_string(id)).c_str(),
+                                                 &name, ImGuiInputTextFlags_AutoSelectAll);
+                        if (ImGui::IsItemDeactivated()) state.editing_instance = -1;
+                    } else {
+                        const std::string shown = info.instance_name(id);
+                        if (ImGui::Selectable(shown.c_str(), ctx.active_instance == i,
+                                              ImGuiSelectableFlags_AllowDoubleClick,
+                                              ImVec2(160, 0))) {
+                            ctx.active_instance = i;
+                            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                                state.editing_instance = id;
+                                state.focus_instance_edit = true;
+                            }
+                        }
+                        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+                            ImGui::SetTooltip("#%d -- double-click to rename", id);
+                    }
                     ImGui::PopID();
                 }
-                ImGui::SameLine();
-                // As on its button -- not its place in the list.
-                ImGui::TextDisabled(
-                    "(editing #%d)",
-                    fit->second[(size_t)ctx.active_instance].instance_id);
             }
 
             if (fit != annotations.end() && skeleton.has_skeleton) {
-                if (n > 1) ImGui::SameLine();
                 if (ImGui::SmallButton(ICON_FK_PLUS " Instance")) {
                     // A new instance gets the next unused id, so ids stay
                     // stable even after one is removed.
@@ -950,7 +988,7 @@ inline void DrawLabelingToolWindow(
         std::string saved_folder = AnnotationCSV::save_all(
             pm.keypoints_root_folder, skeleton.name,
             annotations, scene->num_cams, skeleton.num_nodes,
-            pm.camera_names, &save_err, &pm.annotation_config.box_classes);
+            pm.camera_names, &save_err, &pm.annotation_config.label_info);
         if (saved_folder.empty()) {
             toasts.pushError("Save failed: " + save_err);
         } else {

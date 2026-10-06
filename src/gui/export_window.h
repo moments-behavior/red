@@ -391,7 +391,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                             pm.keypoints_root_folder, skeleton.name,
                             amap, ctx.scene ? (int)ctx.scene->num_cams : 0,
                             skeleton.num_nodes, pm.camera_names, &save_err,
-                            &pm.annotation_config.box_classes);
+                            &pm.annotation_config.label_info);
                         if (!saved.empty()) {
                             // Update label folder to the freshly saved one
                             state.label_folder = saved;
@@ -434,7 +434,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     ecfg.output_folder      = state.output_dir;
                     ecfg.camera_names       = pm.camera_names;
                     ecfg.skeleton_name      = skeleton.name;
-                    ecfg.class_names        = ctx.pm.annotation_config.box_classes.names;
+                    ecfg.class_names        = ctx.pm.annotation_config.label_info.names;
                     ecfg.num_keypoints      = skeleton.num_nodes;
                     ecfg.bbox_margin        = state.margin;
                     ecfg.train_ratio        = state.train_ratio;

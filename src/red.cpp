@@ -1588,29 +1588,30 @@ int main(int argc, char **argv) {
 
                             // Bbox tool. Boxes go on the instance being
                             // edited, which takes the selected class.
-                            auto &box_classes = pm.annotation_config.box_classes;
+                            auto &label_info = pm.annotation_config.label_info;
                             if (win.bbox.enabled) {
-                                bbox_handle_input(win.bbox, box_classes,
+                                bbox_handle_input(win.bbox, label_info,
                                                   annotations, frame, j,
                                                   active_instance, nn, nc,
                                                   iw, ih);
-                                bbox_draw_cursor(win.bbox, box_classes, j, active_instance);
+                                bbox_draw_cursor(win.bbox, label_info, annotations,
+                                                 frame, j, active_instance);
                             }
                             if (display.show_bboxes) {
-                                bbox_draw_overlays(win.bbox, box_classes,
+                                bbox_draw_overlays(win.bbox, label_info,
                                                    annotations, frame, j,
                                                    active_instance, iw, ih);
                             }
 
                             // OBB tool
                             if (win.obb.enabled) {
-                                obb_handle_input(win.obb, win.bbox, box_classes,
+                                obb_handle_input(win.obb, win.bbox, label_info,
                                                  annotations, frame, j,
                                                  active_instance, nn, nc,
                                                  iw, ih);
                             }
                             if (display.show_bboxes) {
-                                obb_draw_overlays(win.obb, win.bbox, box_classes,
+                                obb_draw_overlays(win.obb, win.bbox, label_info,
                                                   annotations, frame, j, iw, ih);
                             }
 

@@ -53,6 +53,17 @@ inline ImVec4 instance_tint(int instance) {
     return kTints[instance <= 0 ? 0 : 1 + ((instance - 1) % (n - 1))];
 }
 
+// An instance's colour for its boxes and its row in the Instances list: the
+// one picked for it (kept by id), else its tint (by place in the list).
+inline ImVec4 instance_color(const LabelInfo &info, int instance_id, int inst_index) {
+    auto it = info.instances.find(instance_id);
+    if (it != info.instances.end() && it->second.has_color()) {
+        const auto &c = it->second.color;
+        return ImVec4(c[0], c[1], c[2], 1.0f);
+    }
+    return instance_tint(inst_index);
+}
+
 // `instance` separates one animal's draggable points from another's: ImPlot
 // keys DragPoint by id, so without it five animals would share one point per
 // node and dragging any would move them together.

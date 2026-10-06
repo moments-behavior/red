@@ -19,7 +19,7 @@ struct AnnotationConfig {
     // (annotations.json "categories"), read from there on load; older
     // projects kept them here, and are still read. Empty in a new project:
     // the first box adds Class_0.
-    BoxClasses box_classes;
+    LabelInfo label_info;
 };
 
 inline void to_json(nlohmann::json &j, const AnnotationConfig &a) {
@@ -34,10 +34,10 @@ inline void from_json(const nlohmann::json &j, AnnotationConfig &a) {
     a.enable_keypoints    = j.value("enable_keypoints", true);
     a.enable_bboxes       = j.value("enable_bboxes", false);
     a.enable_obbs         = j.value("enable_obbs", false);
-    a.box_classes.names   = j.value("class_names", std::vector<std::string>{});
+    a.label_info.names   = j.value("class_names", std::vector<std::string>{});
     // {"animal"} was the default every project got, never a choice (classes
     // could not be renamed): drop it, so it does not read as an animal.
-    if (a.box_classes.names == std::vector<std::string>{"animal"}) a.box_classes.names.clear();
+    if (a.label_info.names == std::vector<std::string>{"animal"}) a.label_info.names.clear();
 }
 
 struct ProjectManager {
