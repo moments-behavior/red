@@ -1594,12 +1594,12 @@ int main(int argc, char **argv) {
                                                   annotations, frame, j,
                                                   active_instance, nn, nc,
                                                   iw, ih);
-                                bbox_draw_cursor(win.bbox, box_classes, j);
+                                bbox_draw_cursor(win.bbox, box_classes, j, active_instance);
                             }
                             if (display.show_bboxes) {
                                 bbox_draw_overlays(win.bbox, box_classes,
                                                    annotations, frame, j,
-                                                   iw, ih);
+                                                   active_instance, iw, ih);
                             }
 
                             // OBB tool

@@ -58,6 +58,14 @@ inline ImVec4 box_class_color(const BoxClasses &classes, int i) {
     return default_box_class_color(i);
 }
 
+// The colour a box is drawn in: with one class, its instance's (as on the
+// Instances buttons) so instances tell apart; with several, its class's.
+// inst_index is the instance's place in the frame's list.
+inline ImVec4 box_draw_color(const BoxClasses &classes, int category, int inst_index) {
+    return classes.names.size() > 1 ? box_class_color(classes, category)
+                                    : instance_tint(inst_index);
+}
+
 // A box's label: "#1", or "rat #1" once there is more than one class to tell
 // apart.
 inline std::string box_label(const BoxClasses &classes, const FrameAnnotation &fa) {
@@ -108,7 +116,8 @@ inline bool box_key(ImGuiKey k) {
 inline void bbox_draw_overlays(const BBoxToolState &state,
                                const BoxClasses &classes,
                                const AnnotationMap &amap, u32 frame,
-                               int cam_idx, int img_w, int img_h) {
+                               int cam_idx, int active_instance,
+                               int img_w, int img_h) {
     (void)img_w;
     // Draw in-progress bbox (while shift-dragging), in its own view only
     if (state.drawing && cam_idx == state.drawing_cam) {
@@ -116,7 +125,8 @@ inline void bbox_draw_overlays(const BBoxToolState &state,
         double dxs[] = {state.start_x, mouse.x, mouse.x, state.start_x, state.start_x};
         double dys[] = {state.start_y, state.start_y, mouse.y, mouse.y, state.start_y};
         ImPlotSpec nspec;
-        nspec.LineColor = box_class_color(classes, state.current_class);
+        nspec.LineColor =
+            box_draw_color(classes, state.current_class, active_instance);
         ImPlot::PlotLine("##bbox_new", dxs, dys, 5, nspec);
     }
 
@@ -130,7 +140,7 @@ inline void bbox_draw_overlays(const BBoxToolState &state,
         if (!cam.has_bbox()) continue;
 
         const int ci = fa.category_id;
-        ImVec4 color = box_class_color(classes, ci);
+        ImVec4 color = box_draw_color(classes, ci, (int)inst);
         const bool hot = state.hovered && cam_idx == state.hovered_cam &&
                          (int)inst == state.hovered_instance;
         if (!hot) color.w *= 0.6f;
@@ -170,7 +180,8 @@ inline bool bbox_blocks_pan(const BBoxToolState &state) {
 // ImPlot's "not allowed" cursor, which it shows for a drag on the views
 // bbox_blocks_pan locks. Call inside the camera's plot.
 inline void bbox_draw_cursor(const BBoxToolState &state,
-                             const BoxClasses &classes, int cam_idx) {
+                             const BoxClasses &classes, int cam_idx,
+                             int active_instance) {
     if (!state.enabled) return;
     const bool here = state.drawing ? cam_idx == state.drawing_cam
                                     : ImGui::GetIO().KeyShift && ImPlot::IsPlotHovered();
@@ -180,7 +191,8 @@ inline void bbox_draw_cursor(const BBoxToolState &state,
     const ImVec2 m = ImGui::GetIO().MousePos;
     const ImVec2 lo = ImPlot::GetPlotPos();
     const ImVec2 hi(lo.x + ImPlot::GetPlotSize().x, lo.y + ImPlot::GetPlotSize().y);
-    const ImU32 col = ImGui::GetColorU32(box_class_color(classes, state.current_class));
+    const ImU32 col = ImGui::GetColorU32(
+        box_draw_color(classes, state.current_class, active_instance));
     const ImU32 cross = IM_COL32(255, 255, 255, 150);
     dl->PushClipRect(lo, hi, true);
     dl->AddLine(ImVec2(lo.x, m.y), ImVec2(m.x - 5, m.y), cross);

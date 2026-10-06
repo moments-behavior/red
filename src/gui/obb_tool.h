@@ -121,7 +121,7 @@ inline void obb_draw_overlays(OBBToolState &state, const BBoxToolState &bbox_sta
             double angle = -cam.extras->obb_angle; // flip angle for Y inversion
 
             int ci = fa.category_id;
-            ImVec4 color = box_class_color(classes, ci);
+            ImVec4 color = box_draw_color(classes, ci, (int)inst);
             if (!state.hovered || cam_idx != state.hovered_cam ||
                 (int)inst != state.hovered_instance)
                 color.w *= 0.6f;
