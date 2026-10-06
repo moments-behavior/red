@@ -70,3 +70,11 @@ inline ImVec4 active_keypoint_color(const UserSettings &s) {
                       s.active_keypoint_color[2], 1.0f);
     return ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
 }
+
+// Where the reprojection colours change (px): green up to `good`, yellow up
+// to `bad`, red above. A preference (user settings), set from the view menu.
+struct ReprojThresholds { double good = 2.0, bad = 5.0; };
+inline ReprojThresholds &reproj_thresholds() {
+    static ReprojThresholds t;
+    return t;
+}

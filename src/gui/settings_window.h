@@ -139,6 +139,13 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
                 other_changed = true;
             ImGui::TextDisabled(
                 "Applies to all camera views and the Keypoints table.");
+            // Also in a view's right-click menu, under By reprojection error.
+            float good = s.reproj_good_px, bad = s.reproj_bad_px;
+            const bool g = ImGui::DragFloat("Reprojection: green up to", &good, 0.1f,
+                                            0.1f, 100.0f, "%.1f px");
+            const bool b = ImGui::DragFloat("Reprojection: yellow up to", &bad, 0.1f,
+                                            0.1f, 200.0f, "%.1f px");
+            if (g || b) set_reproj_thresholds(ctx, good, bad);   // saves
         }
 
         // --- Playback ---
@@ -210,6 +217,7 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
             g_keypoint_colormap = s.keypoint_colormap;
             apply_keypoint_colormap(ctx.skeleton, g_keypoint_colormap);
             s.active_keypoint_color = d.active_keypoint_color;
+            set_reproj_thresholds(ctx, d.reproj_good_px, d.reproj_bad_px);
             s.default_buffer_size = d.default_buffer_size;
             if (s.use_cpu_buffer != d.use_cpu_buffer && ctx.scene &&
                 d.use_cpu_buffer != ctx.scene->use_cpu_buffer)

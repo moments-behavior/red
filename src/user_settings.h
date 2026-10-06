@@ -23,6 +23,9 @@ struct UserSettings {
     int default_brightness = 0;
     float default_contrast = 1.0f;
     bool default_pivot_midgray = true;
+    // Reprojection-error colours (px): green up to good, yellow up to bad.
+    float reproj_good_px = 2.0f;
+    float reproj_bad_px = 5.0f;
 
     // Playback defaults
     float default_playback_speed = 1.0f;
@@ -90,6 +93,8 @@ inline void to_json(nlohmann::json &j, const UserSettings &s) {
         {"last_skeleton_dir", s.last_skeleton_dir},
         {"last_media_dir", s.last_media_dir},
         {"ui_text_scale", s.ui_text_scale},
+        {"reproj_good_px", s.reproj_good_px},
+        {"reproj_bad_px", s.reproj_bad_px},
         {"default_brightness", s.default_brightness},
         {"default_contrast", s.default_contrast},
         {"default_pivot_midgray", s.default_pivot_midgray},
@@ -116,6 +121,8 @@ inline void from_json(const nlohmann::json &j, UserSettings &s) {
     s.last_skeleton_dir = j.value("last_skeleton_dir", std::string{});
     s.last_media_dir = j.value("last_media_dir", std::string{});
     s.ui_text_scale = j.value("ui_text_scale", 1.0f);
+    s.reproj_good_px = j.value("reproj_good_px", 2.0f);
+    s.reproj_bad_px = j.value("reproj_bad_px", 5.0f);
     s.default_brightness = j.value("default_brightness", 0);
     s.default_contrast = j.value("default_contrast", 1.0f);
     s.default_pivot_midgray = j.value("default_pivot_midgray", true);

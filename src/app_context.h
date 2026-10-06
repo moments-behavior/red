@@ -145,6 +145,17 @@ inline void set_ui_text_scale(AppContext &ctx, float scale) {
     save_user_settings(ctx.user_settings);
 }
 
+// Reprojection-error colour thresholds (px): applied at once and saved. The
+// yellow limit is kept at or above the green one.
+inline void set_reproj_thresholds(AppContext &ctx, float good, float bad) {
+    good = std::max(0.1f, good);
+    bad = std::max(good, bad);
+    ctx.user_settings.reproj_good_px = good;
+    ctx.user_settings.reproj_bad_px = bad;
+    reproj_thresholds() = {good, bad};
+    save_user_settings(ctx.user_settings);
+}
+
 // Where Open Videos / Open Images / the Media Folder picker start: the media
 // open now, else the folder media was last opened from, else Settings' media
 // folder, else home -- never red's working directory (/ from Finder).

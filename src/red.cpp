@@ -414,6 +414,7 @@ int main(int argc, char **argv) {
     // Brightness / contrast start neutral (DisplayState's defaults) and are
     // set in the transport bar; how contrast pivots is a saved preference.
     display.pivot_midgray = user_settings.default_pivot_midgray;
+    reproj_thresholds() = {user_settings.reproj_good_px, user_settings.reproj_bad_px};
 
     // variables for project management
     ProjectManager pm = ProjectManager();
@@ -1793,10 +1794,24 @@ int main(int argc, char **argv) {
                             ImGui::EndDisabled();
                             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                                 ImGui::SetTooltip(
-                                    "Placed vs. where the 3D point projects (T to "
-                                    "triangulate):\ngreen <= %.0f px, yellow <= %.0f px, "
-                                    "red above, grey without 3D.",
-                                    kReprojGoodPx, kReprojBadPx);
+                                    "Placed vs. where the 3D point projects, measured "
+                                    "when T solves.\nGrey without 3D.");
+                            // Where the colours change, tuned here while they
+                            // show (saved as a preference).
+                            if (kc == KC::ByReprojError) {
+                                float good = user_settings.reproj_good_px;
+                                float bad = user_settings.reproj_bad_px;
+                                ImGui::Indent();
+                                ImGui::SetNextItemWidth(90.0f);
+                                const bool g = ImGui::DragFloat("green up to##rg", &good, 0.1f,
+                                                                0.1f, 100.0f, "%.1f px");
+                                ImGui::SetNextItemWidth(90.0f);
+                                const bool b = ImGui::DragFloat("yellow up to##rb", &bad, 0.1f,
+                                                                0.1f, 200.0f, "%.1f px");
+                                ImGui::TextDisabled("red above");
+                                ImGui::Unindent();
+                                if (g || b) set_reproj_thresholds(ctx, good, bad);
+                            }
                             ImGui::EndPopup();
                         }
 

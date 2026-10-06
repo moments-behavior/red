@@ -1,5 +1,6 @@
 #pragma once
 #include "annotation.h"
+#include "keypoint_colors.h"   // reproj_thresholds
 #include "implot.h"
 #include "render.h"
 #include "skeleton.h"
@@ -746,7 +747,6 @@ inline bool solve_midline_constraint(FrameAnnotation &fa,
 // between where a keypoint was placed and where its instance's 3D point
 // projects in that camera. NaN with no 3D point, no position, or nothing to
 // measure from (a projection, or a point T moved in an earlier session).
-constexpr double kReprojGoodPx = 2.0, kReprojBadPx = 5.0;
 inline std::vector<double> reprojection_errors_px(const FrameAnnotation &fa, int view_idx,
                                                   int num_nodes, const CameraParams &cam,
                                                   double img_h) {
@@ -778,12 +778,12 @@ inline std::vector<double> reprojection_errors_px(const FrameAnnotation &fa, int
     return out;
 }
 
-// Green up to kReprojGoodPx, yellow up to kReprojBadPx, red above; grey for
+// Green up to reproj_thresholds().good, yellow up to .bad, red above; grey for
 // no error to show (NaN).
 inline ImVec4 reprojection_error_color(double err) {
     if (!std::isfinite(err)) return ImVec4(0.6f, 0.6f, 0.6f, 1.0f);
-    if (err <= kReprojGoodPx) return ImVec4(0.25f, 0.9f, 0.3f, 1.0f);
-    if (err <= kReprojBadPx) return ImVec4(1.0f, 0.85f, 0.2f, 1.0f);
+    if (err <= reproj_thresholds().good) return ImVec4(0.25f, 0.9f, 0.3f, 1.0f);
+    if (err <= reproj_thresholds().bad) return ImVec4(1.0f, 0.85f, 0.2f, 1.0f);
     return ImVec4(1.0f, 0.25f, 0.2f, 1.0f);
 }
 
