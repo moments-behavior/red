@@ -141,13 +141,15 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
     }
 
     // Secondary, as quiet links on one line: just looking at videos, a
-    // tailcycle session (it brings its own cameras and skeleton), and help.
+    // tailcycle session (it brings its own cameras and skeleton), settings
+    // (worth setting before a first project), and help.
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
     {
         std::vector<const char *> links = {"Open Videos"};
         if (TailcycleImport::available()) links.push_back("Open tailcycle Dataset");
+        links.push_back("Settings");
         links.push_back("Help");
         const char *sep = "  \xC2\xB7  ";   // a middle dot between them
         float w = 0;
@@ -173,6 +175,8 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
                         "ChooseMedia", "Select Video(s)", video_ext_filter(), cfg);
                 } else if (what == "Help") {
                     win.show_help = true;
+                } else if (what == "Settings") {
+                    win.settings.show = true;
                 } else {
                     run_or_confirm_unsaved(ctx, [&win]() {
                         tailcycle_open_browse(win.tailcycle_open);
@@ -184,6 +188,9 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
                     ImGui::SetTooltip("Play videos without a project.");
                 else if (what == "Help")
                     ImGui::SetTooltip("Red Help: workflows, tools and shortcuts.");
+                else if (what == "Settings")
+                    ImGui::SetTooltip("Text size, where file dialogs start, keypoint "
+                                      "colours, ...");
                 else
                     ImGui::SetTooltip("Browse a tailcycle-dataset root and open one "
                                       "of its\nsessions. Brings its own cameras and "
