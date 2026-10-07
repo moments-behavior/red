@@ -31,7 +31,7 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 APPDIR="$WORK/red.AppDir"
 mkdir -p "$APPDIR/usr"
-cp -a "$STAGE/bin" "$STAGE/lib" "$STAGE/fonts" "$STAGE/default_imgui_layout.ini" "$APPDIR/usr/"
+cp -a "$STAGE/bin" "$STAGE/lib" "$STAGE/fonts" "$STAGE/licenses" "$STAGE/default_imgui_layout.ini" "$APPDIR/usr/"
 cp "$REPO/icon.png" "$APPDIR/red.png"
 cp "$REPO/icon.png" "$APPDIR/.DirIcon"
 

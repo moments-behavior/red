@@ -1,0 +1,4 @@
+src/FFmpegDemuxer.h, src/FFmpegDemuxer.cpp
+Copyright 2019 NVIDIA Corporation
+Licensed under the Apache License, Version 2.0 (Apache-2.0.txt in the folder
+above). Modified for Red.

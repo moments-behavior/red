@@ -1,0 +1,12 @@
+# Licence files of the code compiled into red, from the submodules and lib/:
+# <name in licenses/vendored/> <file in the repo>. Read by collect_common.sh
+# and packaging/windows/make_zip.ps1. Notices for code without a licence file
+# of its own (single-file libraries in src/) are in vendored/ beside this.
+imgui                lib/imgui/LICENSE.txt
+implot               lib/implot/LICENSE
+ImGuiFileDialog      lib/ImGuiFileDialog/LICENSE
+dirent               lib/ImGuiFileDialog/dirent/LICENSE
+stb                  lib/ImGuiFileDialog/stb/LICENSE
+cpp-httplib          lib/httplib/LICENSE
+miniz                lib/miniz/LICENSE
+IconFontCppHeaders   lib/IconFontCppHeaders/licence.txt

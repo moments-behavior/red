@@ -7,6 +7,7 @@
 #     red/bin/red          rpath $ORIGIN/../lib
 #     red/lib/             every shared library red needs, minus the system's
 #     red/fonts/  default_imgui_layout.ini  icon.png
+#     red/licenses/        Red's and every bundled library's licence
 # (red looks for fonts and the default layout one folder above its binary),
 # checks it, and writes <out_dir>/red-<version>-linux-x64.tar.gz (default
 # out_dir: dist).
@@ -71,12 +72,58 @@ missing="$(ldd "$EXE" | awk '/=> not found/ { print $1 }')"
 [ -z "$missing" ] || { echo "ldd cannot resolve on this machine: $missing" >&2; exit 1; }
 n=0
 : > "$OUT/.sources"
+: > "$OUT/.libs"
 while read -r soname path; do
     is_system "$soname" && continue
     cp -L "$path" "$STAGE/lib/$soname"
     dirname "$(realpath "$path")" >> "$OUT/.sources"
+    echo "$path" >> "$OUT/.libs"
     n=$((n + 1))
 done < <(ldd "$EXE" | awk '$2 == "=>" && $3 ~ /^\// { print $1, $3 }')
+
+# Licences: Red's, the vendored code's and the fonts' (collect_common.sh), and
+# for each Debian package a bundled library comes from, its copyright file and
+# the source package it was built from.
+LIC="$STAGE/licenses"
+"$REPO/packaging/licenses/collect_common.sh" "$LIC"
+# The package owning a file. dpkg knows each file by the path its package
+# installs, which on a merged-/usr system may be /usr/lib/... or /lib/...
+owner() {
+    local p cand out
+    p="$(realpath "$1")"
+    for cand in "$1" "$p" "/usr${p#/usr}" "${p#/usr}"; do
+        out="$(dpkg -S "$cand" 2> /dev/null || true)"
+        out="${out%%$'\n'*}"
+        [ -n "$out" ] && { echo "${out%%:*}"; return 0; }
+    done
+    return 1
+}
+: > "$OUT/.pkgs"
+while IFS= read -r path; do
+    pkg="$(owner "$path")" || { echo "no Debian package owns $path, no licence to collect" >&2; exit 1; }
+    echo "$pkg" >> "$OUT/.pkgs"
+done < "$OUT/.libs"
+{
+    echo "Shared libraries in lib/, by Ubuntu package: package, version, source"
+    echo "package and where to get its source. Licences: the folder of the"
+    echo "same name. Or, on Ubuntu: apt-get source <package>=<version>"
+    echo
+} > "$LIC/third_party/SOURCES.txt"
+for pkg in $(sort -u "$OUT/.pkgs"); do
+    copyright="/usr/share/doc/$pkg/copyright"
+    [ -f "$copyright" ] || { echo "no $copyright" >&2; exit 1; }
+    mkdir -p "$LIC/third_party/$pkg"
+    cp -L "$copyright" "$LIC/third_party/$pkg/copyright"
+    read -r ver src srcver < <(dpkg-query -W -f '${Version} ${source:Package} ${source:Version}\n' "$pkg" | head -1)
+    case "$src" in
+    apache-arrow)   # Apache's own repository, not Ubuntu's
+        up="${srcver%%-*}"
+        url="https://archive.apache.org/dist/arrow/arrow-$up/apache-arrow-$up.tar.gz" ;;
+    *)  url="https://launchpad.net/ubuntu/+source/$src/$srcver" ;;
+    esac
+    printf '%-28s %-28s %s\n' "$pkg" "$ver" "$url" >> "$LIC/third_party/SOURCES.txt"
+done
+rm -f "$OUT/.libs" "$OUT/.pkgs"
 
 # Where they came from. A release should carry the distribution's own
 # packages; a library from a conda environment, ~/ or another private build

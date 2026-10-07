@@ -124,6 +124,50 @@ cp "$EXE" "$CONTENTS/MacOS/red"
 cp -R "$REPO/fonts" "$RES/fonts"
 cp "$REPO/default_imgui_layout.ini" "$RES/"
 
+# Licences: Red's, the vendored code's and the fonts' (collect_common.sh), and
+# for each Homebrew formula a bundled dylib comes from, the licence files
+# Homebrew installs beside it, plus its version and source address.
+LIC="$RES/licenses"
+"$REPO/packaging/licenses/collect_common.sh" "$LIC"
+: > "$WORK/formulae"
+while IFS= read -r real; do
+    case "$real" in
+    */Cellar/*/*/*) ;;
+    *) echo "not from a Homebrew formula, no licence to collect: $real" >&2; exit 1 ;;
+    esac
+    rest="${real#*/Cellar/}"
+    echo "${rest%%/*} $(echo "$rest" | cut -d/ -f2)" >> "$WORK/formulae"
+done < "$WORK/libs"
+{
+    echo "Shared libraries in Red.app/Contents/Frameworks, by Homebrew formula:"
+    echo "formula, version, source code. Licences, and the formula that built it"
+    echo "(build options, patches): the folder of the same name."
+    echo
+} > "$LIC/third_party/SOURCES.txt"
+sort -u "$WORK/formulae" | while read -r formula ver; do
+    cellar="$(brew --cellar)/$formula/$ver"
+    mkdir -p "$LIC/third_party/$formula"
+    n=0
+    for f in "$cellar"/*; do
+        case "$(basename "$f" | tr '[:upper:]' '[:lower:]')" in
+        licen[cs]e*|copying*|copyright*|notice*|authors*|patents*)
+            [ -f "$f" ] && { cp "$f" "$LIC/third_party/$formula/"; n=$((n + 1)); } ;;
+        esac
+    done
+    [ "$n" -gt 0 ] || { echo "no licence file in $cellar" >&2; exit 1; }
+    # The formula as it was when installed (Homebrew keeps a copy): its
+    # source address is that version's -- `brew info` gives today's -- and
+    # it records the build options and patches, so it goes in too.
+    rb="$cellar/.brew/$formula.rb"
+    [ -f "$rb" ] || { echo "no installed formula file: $rb" >&2; exit 1; }
+    cp "$rb" "$LIC/third_party/$formula/homebrew-formula.rb"
+    url="$(awk '/^ +url "/ { u = $2; gsub(/[",]/, "", u); getline
+                             if ($1 == "revision:") { r = $2; gsub(/[",]/, "", r); u = u " @ " r }
+                             print u; exit }' "$rb")"
+    [ -n "$url" ] || { echo "no source url in $rb" >&2; exit 1; }
+    printf '%-24s %-14s %s\n' "$formula" "$ver" "$url" >> "$LIC/third_party/SOURCES.txt"
+done
+
 # App icon from the repo's icon.png (512 px): every size macOS asks for, in
 # an .icns. No 512@2x -- that is 1024 px, and blowing 512 up would only blur.
 ICONSET="$WORK/red.iconset"

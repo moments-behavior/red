@@ -6,6 +6,7 @@
 # Lays out
 #     dist\red\bin\red.exe  + every DLL it needs
 #     dist\red\fonts\       default_imgui_layout.ini
+#     dist\red\licenses\    Red's and every bundled library's licence
 # (red looks for fonts and the default layout one folder above its exe), then
 # zips it. The DLLs come from three places: vcpkg's, which the build already
 # copied next to red.exe; FFmpeg's, from FFMPEG_ROOT\bin (or C:\ffmpeg\bin, as
@@ -87,6 +88,91 @@ Copy-Item (Join-Path $FFmpeg "bin\*.dll") $Bin
 Copy-Item (Join-Path $crt.FullName "*.dll") $Bin
 Copy-Item (Join-Path $Repo "fonts") $Stage -Recurse
 Copy-Item (Join-Path $Repo "default_imgui_layout.ini") $Stage
+
+# --- Licences ------------------------------------------------------------------
+# As packaging/licenses/collect_common.sh lays them out on macOS and Linux:
+# Red's, the README, the fonts' and vendored code's, the licence texts. Then
+# third_party\: each vcpkg port a DLL comes from (its copyright file, and the
+# port files saying which source it was built from), FFmpeg's, and the C++
+# runtime's.
+$LicSrc = Join-Path $Repo "packaging\licenses"
+$Lic = Join-Path $Stage "licenses"
+$Vend = Join-Path $Lic "vendored"
+$Third = Join-Path $Lic "third_party"
+New-Item -ItemType Directory -Force -Path $Vend, $Third | Out-Null
+Copy-Item (Join-Path $Repo "LICENSE") (Join-Path $Lic "LICENSE.txt")
+foreach ($f in "README.txt", "fonts.txt", "GPL-3.0.txt", "Apache-2.0.txt", "OFL-1.1.txt") {
+    Copy-Item (Join-Path $LicSrc $f) $Lic
+}
+Copy-Item (Join-Path $LicSrc "vendored\*.txt") $Vend
+foreach ($line in Get-Content (Join-Path $LicSrc "vendored.txt")) {
+    if ($line -match '^\s*(#|$)') { continue }
+    $name, $file = -split $line
+    $src = Join-Path $Repo $file
+    if (-not (Test-Path $src)) { throw "licence file missing: $file" }
+    Copy-Item $src (Join-Path $Vend "$name.txt")
+}
+
+# vcpkg: VCPKG_ROOT, else the vcpkg on PATH, else %USERPROFILE%\vcpkg -- as
+# build.bat looks -- and of those the one whose install lists the DLLs.
+$roots = @($env:VCPKG_ROOT)
+$onPath = Get-Command vcpkg -ErrorAction SilentlyContinue
+if ($onPath) { $roots += Split-Path $onPath.Source }
+$roots += Join-Path $env:USERPROFILE "vcpkg"
+$ffDlls = @(Get-ChildItem (Join-Path $FFmpeg "bin\*.dll") | ForEach-Object { $_.Name })
+$vcpkgDlls = @(Get-ChildItem (Join-Path $BuildDir "*.dll") | ForEach-Object { $_.Name } |
+    Where-Object { $ffDlls -notcontains $_ })
+$Vcpkg = $null
+foreach ($r in $roots | Where-Object { $_ }) {
+    if (Test-Path (Join-Path $r "installed\vcpkg\info")) { $Vcpkg = $r; break }
+}
+if ($vcpkgDlls.Count -gt 0 -and -not $Vcpkg) { throw "vcpkg not found (set VCPKG_ROOT): needed for the DLLs' licences" }
+
+$sources = @(
+    "Shared libraries in bin\: name, version, where its source is. Licences:",
+    "the folder of the same name; for vcpkg ports also the port files, which",
+    "give the exact source and how it was built.",
+    ""
+)
+$ports = @{}
+foreach ($dll in $vcpkgDlls) {
+    $hit = Select-String -Path (Join-Path $Vcpkg "installed\vcpkg\info\*.list") `
+        -Pattern ("/bin/" + [regex]::Escape($dll) + '$') -List | Select-Object -First 1
+    if (-not $hit) { throw "no vcpkg port installs $dll -- no licence to collect" }
+    $ports[(Split-Path $hit.Path -Leaf)] = $true
+}
+foreach ($list in $ports.Keys | Sort-Object) {
+    # <port>_<version>_<triplet>.list; the version may itself hold "_".
+    $parts = [IO.Path]::GetFileNameWithoutExtension($list).Split("_")
+    $port = $parts[0]
+    $triplet = $parts[-1]
+    $ver = ($parts[1..($parts.Count - 2)]) -join "_"
+    $dst = Join-Path $Third $port
+    New-Item -ItemType Directory -Force -Path $dst | Out-Null
+    $copyright = Join-Path $Vcpkg "installed\$triplet\share\$port\copyright"
+    if (-not (Test-Path $copyright)) { throw "no $copyright" }
+    Copy-Item $copyright $dst
+    foreach ($pf in "vcpkg.json", "portfile.cmake") {
+        $p = Join-Path $Vcpkg "ports\$port\$pf"
+        if (Test-Path $p) { Copy-Item $p (Join-Path $dst "vcpkg-$pf") }
+    }
+    $sources += "{0,-24} {1,-16} vcpkg port, https://github.com/microsoft/vcpkg/tree/master/ports/{0}" -f $port, $ver
+}
+
+# FFmpeg: the licence files at the top of its folder, and its version.
+$ffDst = Join-Path $Third "ffmpeg"
+New-Item -ItemType Directory -Force -Path $ffDst | Out-Null
+$ffLic = @(Get-ChildItem $FFmpeg -File | Where-Object { $_.Name -match '^(licen[cs]e|copying|readme)' })
+if ($ffLic.Count -eq 0) { throw "no licence file in $FFmpeg (a BtbN build has LICENSE.txt)" }
+$ffLic | Copy-Item -Destination $ffDst
+$ffVer = (Split-Path $FFmpeg -Leaf)
+$ffExe = Join-Path $FFmpeg "bin\ffmpeg.exe"
+if (Test-Path $ffExe) { $ffVer = ((Quiet { & $ffExe -version }) | Select-Object -First 1) }
+$sources += "ffmpeg                   $ffVer"
+$sources += "                         https://ffmpeg.org/download.html (source: the version above),"
+$sources += "                         built by https://github.com/BtbN/FFmpeg-Builds"
+$sources += "Microsoft C++ runtime    $(Split-Path $crt.FullName -Leaf)  redistributable files of Visual Studio"
+Set-Content -Path (Join-Path $Third "SOURCES.txt") -Value $sources
 
 # --- Every import must be in bin\ or part of Windows ------------------------
 # Windows' own DLLs live in System32; api-ms-win-* / ext-ms-* are API sets the
