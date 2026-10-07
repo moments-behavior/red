@@ -1,6 +1,7 @@
 *.exe
 *.o
 release
+release-linux
 .vscode
 .vs
 Debug
@@ -38,3 +39,6 @@ ENV/
 # Fly model (generated)
 models/fruitfly/
 .DS_Store
+
+# packaging output (packaging/macos/make_app.sh)
+dist/

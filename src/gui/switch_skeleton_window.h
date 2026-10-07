@@ -29,6 +29,7 @@ struct SwitchSkeletonState {
     int   preset_idx = 0;
 
     std::string status;         // result/error message shown after Apply
+    int skeleton_wait = -1;     // waiting on the Skeleton Creator (see "New...")
 };
 
 // Applies a staged skeleton selection to an already-open project: reloads
@@ -50,7 +51,8 @@ inline bool switch_project_skeleton(AppContext &ctx,
         std::string save_err;
         AnnotationCSV::save_all(pm.keypoints_root_folder, ctx.skeleton.name,
                                 ctx.annotations, ctx.scene->num_cams,
-                                ctx.skeleton.num_nodes, pm.camera_names, &save_err);
+                                ctx.skeleton.num_nodes, pm.camera_names, &save_err,
+                                &pm.annotation_config.label_info);
     }
 
     pm.load_skeleton_from_json = new_load_from_json;
@@ -61,6 +63,7 @@ inline bool switch_project_skeleton(AppContext &ctx,
 
     // Clear everything indexed by the old skeleton's node layout.
     ctx.annotations.clear();
+    mark_labels_saved(ctx);   // nothing left that is unsaved
 
     // Persist immediately — no explicit "Save Project" step, matching
     // transport_bar.h's sync_fix_enabled toggle.
@@ -78,7 +81,9 @@ inline void DrawSwitchSkeletonWindow(SwitchSkeletonState &st, AppContext &ctx) {
 
     DrawPanel("Switch Skeleton", st.show, [&]() {
         if (pm.project_path.empty()) {
-            ImGui::TextDisabled("Open or create a project first.");
+            ImGui::TextDisabled(pm.untitled
+                                    ? "Save the project first (" RED_MOD_KEY "+S)."
+                                    : "Open or create a project first.");
             st.initialized = false;
             return;
         }
@@ -122,22 +127,28 @@ inline void DrawSwitchSkeletonWindow(SwitchSkeletonState &st, AppContext &ctx) {
                 if (st.skeleton_name == labels_s[i]) { st.preset_idx = i; break; }
         }
 
-        int mode = st.load_from_json ? 0 : 1;
-        ImGui::SetNextItemWidth(120);
-        if (ImGui::Combo("Mode##switch_skel_mode", &mode, "File\0Preset\0")) {
-            st.load_from_json = (mode == 0);
+        // A skeleton saved in the creator after "New..." becomes the choice.
+        if (std::string saved = skeleton_saved_since(ctx, st.skeleton_wait);
+            !saved.empty()) {
+            st.load_from_json = true;
+            st.skeleton_file = saved;
+            st.skeleton_wait = -1;
         }
 
+        // One row, as in the New Project form: the preset list (or the
+        // path and Browse), New..., then File / Preset.
+        const ImGuiStyle &style = ImGui::GetStyle();
+        const float gap = style.ItemInnerSpacing.x;
+        const float new_w = ImGui::CalcTextSize("New...").x + style.FramePadding.x * 2;
+        const float mode_w = 90.0f;
+        const float avail = ImGui::GetContentRegionAvail().x;
         if (st.load_from_json) {
-            float avail = ImGui::GetContentRegionAvail().x;
-            const char *btxt = "Browse##browse_skel_switch";
-            float browse_w = ImGui::CalcTextSize(btxt).x +
-                             ImGui::GetStyle().FramePadding.x * 2.0f;
-            float gap = ImGui::GetStyle().ItemInnerSpacing.x;
-            ImGui::SetNextItemWidth(ImMax(50.0f, avail - browse_w - gap));
+            const float browse_w = ImGui::CalcTextSize("Browse").x + style.FramePadding.x * 2;
+            ImGui::SetNextItemWidth(
+                ImMax(50.0f, avail - browse_w - new_w - mode_w - 3 * gap));
             ImGui::InputText("##switch_skel_path", &st.skeleton_file);
             ImGui::SameLine(0.0f, gap);
-            if (ImGui::Button(btxt)) {
+            if (ImGui::Button("Browse##browse_skel_switch")) {
                 IGFD::FileDialogConfig cfg;
                 cfg.countSelectionMax = 1;
                 cfg.path = ctx.skeleton_dir;
@@ -147,7 +158,7 @@ inline void DrawSwitchSkeletonWindow(SwitchSkeletonState &st, AppContext &ctx) {
             }
         } else {
             ImGui::BeginDisabled(labels_s.empty());
-            ImGui::SetNextItemWidth(220);
+            ImGui::SetNextItemWidth(ImMax(50.0f, avail - new_w - mode_w - 2 * gap));
             if (ImGui::Combo("##switch_skel_preset", &st.preset_idx,
                              labels_s.data(), (int)labels_s.size())) {
                 st.skeleton_name = labels_s[st.preset_idx];
@@ -156,6 +167,21 @@ inline void DrawSwitchSkeletonWindow(SwitchSkeletonState &st, AppContext &ctx) {
             if (!labels_s.empty() && st.skeleton_name.empty())
                 st.skeleton_name = labels_s[st.preset_idx];
         }
+        // Always there: draw a new skeleton. It is a file, so this goes to
+        // File, where the saved skeleton is filled in.
+        ImGui::SameLine(0.0f, gap);
+        if (ImGui::Button("New...##switch_skel_new")) {
+            st.skeleton_wait = open_skeleton_creator_for(ctx);
+            st.load_from_json = true;
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("Draw a new skeleton in the Skeleton Creator; "
+                              "saving it there picks it here.");
+        ImGui::SameLine(0.0f, gap);
+        int mode = st.load_from_json ? 0 : 1;
+        ImGui::SetNextItemWidth(mode_w);
+        if (ImGui::Combo("##switch_skel_mode", &mode, "File\0Preset\0"))
+            st.load_from_json = (mode == 0);
 
         ImGui::Separator();
         bool unchanged = st.load_from_json == pm.load_skeleton_from_json &&

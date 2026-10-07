@@ -24,6 +24,12 @@ void metal_cleanup();
 #include <CoreVideo/CoreVideo.h>
 void metal_upload_pixelbuf(int cam_idx, CVPixelBufferRef pb, uint32_t w, uint32_t h);
 
+// A standalone RGBA image texture (e.g. the Skeleton Creator's background),
+// separate from the per-camera textures. The returned ID owns a reference;
+// pass it back to metal_release_image_texture when done.
+ImTextureID metal_create_image_texture(const uint8_t *rgba, uint32_t w, uint32_t h);
+void metal_release_image_texture(ImTextureID tex_id);
+
 // Phase 3: contrast/brightness compute shader (in-place on display texture)
 void metal_apply_contrast_brightness(int cam_idx, float contrast, float brightness, bool pivot_midgray);
 

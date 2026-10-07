@@ -12,9 +12,11 @@
 #include "skeleton.h"
 #include "user_settings.h"
 #include "utils.h"
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -25,7 +27,12 @@ struct DisplayState {
     float contrast = 1.0f;
     bool pivot_midgray = true;
     bool show_keypoints = true;
+    bool show_keypoint_names = false;
     bool show_bboxes = true;
+    // How keypoints are coloured: each node its own colour, all of an
+    // instance's in its colour (as its box), or by reprojection error.
+    enum class KeypointColoring { ByNode, ByInstance, ByReprojError };
+    KeypointColoring keypoint_coloring = KeypointColoring::ByNode;
 };
 
 struct AppContext {
@@ -52,7 +59,7 @@ struct AppContext {
 
     // Settings + paths
     UserSettings &user_settings;
-    std::string &red_data_dir;
+    std::string &default_dir;
     std::string &skeleton_dir;
 
     // Media state
@@ -64,6 +71,10 @@ struct AppContext {
     bool &input_is_imgs;
     int &label_buffer_size;
     int &current_frame_num;
+    // Which animal is being edited. An index into the frame's instances, not
+    // an instance_id -- the id is stable across frames, the index is what the
+    // UI walks. Clamped per frame, since frames need not hold the same count.
+    int &active_instance;
 
     // Display
     DisplayState &display;
@@ -82,22 +93,148 @@ struct AppContext {
 #ifdef __APPLE__
     std::vector<int> &mac_last_uploaded_frame;
 #endif
+
+    // Untitled projects (run_or_confirm_unsaved, save_untitled_project).
+    // Owned here, after the references, so main's brace-init is unchanged.
+    std::function<void()> unsaved_action;    // waiting on Save / Don't Save / Cancel
+    bool unsaved_prompt = false;             // open that prompt next frame
+    std::function<void()> after_save_action; // run once Save Project has saved
+    bool save_project_prompt = false;        // open Save Project next frame
+    // The labels as last loaded or saved: what "unsaved changes" is measured
+    // against (labels_unsaved).
+    AnnotationMap saved_annotations;
+
+    // Skeleton Creator, reached from the forms that pick a skeleton: a request
+    // to open it, and each skeleton it saves (the serial counts saves, so a
+    // form waiting on one can tell a new save from an old).
+    bool open_skeleton_creator = false;
+    std::string skeleton_saved_path;
+    int skeleton_saved_serial = 0;
 };
+
+// A skeleton picker's "New..." button: opens the Skeleton Creator and returns
+// the save count to wait past (see skeleton_saved_since).
+inline int open_skeleton_creator_for(AppContext &ctx) {
+    ctx.open_skeleton_creator = true;
+    return ctx.skeleton_saved_serial;
+}
+// The skeleton saved in the creator since `since` (a value from
+// open_skeleton_creator_for; < 0 = not waiting), or "".
+inline std::string skeleton_saved_since(const AppContext &ctx, int since) {
+    return since >= 0 && ctx.skeleton_saved_serial > since ? ctx.skeleton_saved_path
+                                                           : std::string();
+}
 
 // --- Free functions replacing lambdas that captured main() locals ---
 
+// A skeleton .json was picked or saved: start the next skeleton dialog in its
+// folder, this session and next (remembered in user settings).
+inline void remember_skeleton_dir(AppContext &ctx, const std::string &file) {
+    const std::string dir = std::filesystem::path(file).parent_path().string();
+    if (dir.empty() || dir == ctx.skeleton_dir) return;
+    ctx.skeleton_dir = dir;
+    ctx.user_settings.last_skeleton_dir = dir;
+    save_user_settings(ctx.user_settings);
+}
+
+// UI text size: View > Text Size, its shortcuts, and the Settings slider.
+// Kept within the slider's range, applied at once and saved.
+constexpr float kUiTextScaleMin = 0.7f, kUiTextScaleMax = 2.0f, kUiTextScaleStep = 0.1f;
+inline void set_ui_text_scale(AppContext &ctx, float scale) {
+    scale = std::clamp(std::round(scale * 20.0f) / 20.0f, kUiTextScaleMin,
+                       kUiTextScaleMax);
+    if (scale == ctx.user_settings.ui_text_scale) return;
+    ctx.user_settings.ui_text_scale = scale;
+    ImGui::GetStyle().FontScaleMain = scale;
+    save_user_settings(ctx.user_settings);
+}
+
+// Reprojection-error colour thresholds (px): applied at once and saved. The
+// yellow limit is kept at or above the green one.
+inline void set_reproj_thresholds(AppContext &ctx, float good, float bad) {
+    good = std::max(0.1f, good);
+    bad = std::max(good, bad);
+    ctx.user_settings.reproj_good_px = good;
+    ctx.user_settings.reproj_bad_px = bad;
+    reproj_thresholds() = {good, bad};
+    save_user_settings(ctx.user_settings);
+}
+
+// Where Open Videos / Open Images / the Media Folder picker start: the media
+// open now, else the folder media was last opened from, else Settings' media
+// folder, else home -- never red's working directory (/ from Finder).
+inline std::string media_browse_dir(const AppContext &ctx) {
+    std::error_code ec;
+    auto usable = [&](const std::string &d) {
+        return !d.empty() && std::filesystem::is_directory(d, ec);
+    };
+    // The Settings folder when one is set (a fixed place, chosen); else the
+    // media open now, else the folder media was last opened from; else home.
+    if (usable(ctx.user_settings.default_media_root_path))
+        return ctx.user_settings.default_media_root_path;
+    if ((ctx.ps.video_loaded || ctx.input_is_imgs) && usable(ctx.pm.media_folder))
+        return ctx.pm.media_folder;
+    if (usable(ctx.user_settings.last_media_dir))
+        return ctx.user_settings.last_media_dir;
+    return get_home_directory();
+}
+
+inline void remember_media_dir(AppContext &ctx, const std::string &dir) {
+    if (dir.empty() || dir == ctx.user_settings.last_media_dir) return;
+    ctx.user_settings.last_media_dir = dir;
+    save_user_settings(ctx.user_settings);
+}
+
 // Copy the shipped default_imgui_layout.ini into a project folder.
 // No-op if ini already exists.
-inline void copy_default_layout_to_project(const AppContext &ctx, const std::string &proj_path) {
+// Where this project's layout is kept, seeding it from the shipped default if
+// it is not there yet.
+//
+// Next to the project when that directory can be written, which is the useful
+// place -- the layout travels with the project. When it cannot be, the layout
+// goes under ~/.config/red/layouts instead, keyed by the project path. A read-only or
+// permission-denied project directory is ordinary on a shared NFS export, and
+// the copy failure used to be swallowed into an unchecked error_code: the ini
+// then did not exist, LoadIniSettingsFromDisk returned early, and with no
+// dockspace in the context every panel came up floating and the camera-docking
+// pass found no central node to dock into.
+inline std::string resolve_project_layout_path(const AppContext &ctx,
+                                               const std::string &proj_path,
+                                               bool *created_fresh = nullptr) {
     namespace fs = std::filesystem;
-    fs::path dest = fs::path(proj_path) / "imgui_layout.ini";
-    if (fs::exists(dest))
-        return;
-    const std::string src = ctx.window->exe_dir + "/../default_imgui_layout.ini";
-    if (fs::exists(src)) {
-        std::error_code ec;
-        fs::copy_file(src, dest, ec);
+    if (created_fresh) *created_fresh = false;
+    const fs::path in_project = fs::path(proj_path) / "imgui_layout.ini";
+    std::error_code ec;
+    if (fs::exists(in_project, ec))
+        return in_project.string();
+    if (created_fresh) *created_fresh = true;
+
+    const std::string src =
+        red_resource_dir(ctx.window->exe_dir) + "/default_imgui_layout.ini";
+    const bool have_src = fs::exists(src, ec);
+
+    if (have_src) {
+        ec.clear();
+        fs::copy_file(src, in_project, ec);
+        if (!ec) return in_project.string();
     }
+
+    // Not writable there. Keep it in ~/.config/red/layouts under a name derived
+    // from the project path, so two projects cannot share one layout.
+    std::string key;
+    for (char c : proj_path)
+        key += (std::isalnum((unsigned char)c) ? c : '_');
+    if (key.size() > 120) key = key.substr(key.size() - 120);
+    const fs::path dir = user_settings_path().parent_path() / "layouts";
+    ec.clear();
+    fs::create_directories(dir, ec);
+    const fs::path fallback = dir / (key + ".ini");
+    ec.clear();
+    if (!fs::exists(fallback, ec) && have_src) {
+        ec.clear();
+        fs::copy_file(src, fallback, ec);
+    }
+    return fallback.string();
 }
 
 // Migrate a single window header in an ini string. Returns true if content was modified.
@@ -205,12 +342,27 @@ inline void migrate_ini_window_names(const std::string &ini_path) {
 // projects come up with a broken layout (camera windows hard-docked to
 // 0x05-0x08 collide, Keypoints/Labeling Tool orphaned and invisible).
 inline void switch_ini_to_path(AppContext &ctx, const std::string &project_path) {
-    ctx.project_ini_path = project_path + "/imgui_layout.ini";
-    copy_default_layout_to_project(ctx, project_path);
+    bool fresh = false;
+    ctx.project_ini_path =
+        resolve_project_layout_path(ctx, project_path, &fresh);
     migrate_ini_window_names(ctx.project_ini_path);
     if (!ctx.main_loop_running) {
         // Startup path: NewFrame() loads io.IniFilename itself.
         ImGui::GetIO().IniFilename = ctx.project_ini_path.c_str();
+        return;
+    }
+    // A project created around media that is already open keeps the
+    // arrangement on screen. The layout it was just given is the shipped
+    // default, which names six windows and no cameras -- loading it rebuilt
+    // the dock tree without them, and the camera views, whose
+    // SetNextWindowDockID is ImGuiCond_FirstUseEver and had already fired,
+    // came back floating. Adopt the live layout instead and write it there.
+    if (fresh) {
+        ctx.preframe.enqueue([&ctx]() {
+            ImGuiIO &io = ImGui::GetIO();
+            io.IniFilename = ctx.project_ini_path.c_str();
+            ImGui::SaveIniSettingsToDisk(ctx.project_ini_path.c_str());
+        });
         return;
     }
     ctx.preframe.enqueue([&ctx]() {
@@ -241,14 +393,65 @@ inline void switch_ini_to_project(AppContext &ctx) {
 }
 
 // Close project: auto-save, unload media, reset all project state.
-inline void close_project(AppContext &ctx) {
-    // 1. Auto-save annotations if project is loaded
-    if (!ctx.pm.keypoints_root_folder.empty() && !ctx.annotations.empty()) {
+// save_labels=false discards label edits since the last save -- for a reload
+// the user chose to make without saving (Project > Camera Timestamps).
+// Whether two sets of labels hold the same: every frame's 2D keypoints and
+// boxes (and absent marks) per camera, and 3D. An instance with nothing on it
+// is the same as no instance.
+inline bool annotations_match(const AnnotationMap &a, const AnnotationMap &b,
+                              int num_cameras) {
+    std::set<u32> frames;
+    for (const auto &[f, fis] : a) frames.insert(f);
+    for (const auto &[f, fis] : b) frames.insert(f);
+    for (u32 f : frames) {
+        auto ia = a.find(f), ib = b.find(f);
+        const FrameInstances *pa = ia == a.end() ? nullptr : &ia->second;
+        const FrameInstances *pb = ib == b.end() ? nullptr : &ib->second;
+        for (int c = 0; c < num_cameras; ++c)
+            if (!view_labels_equal(pa, pb, (size_t)c)) return false;
+        if (!frame_3d_equal(pa, pb)) return false;
+    }
+    return true;
+}
+
+// The labels on screen are now what is on disk.
+inline void mark_labels_saved(AppContext &ctx) { ctx.saved_annotations = ctx.annotations; }
+
+// Labels that quitting or opening something else would lose: an Untitled
+// project's (it has nowhere to keep them yet), or changes to a saved
+// project's since they were loaded or saved. A tailcycle session has no red
+// label folder -- it saves back to its own tables -- and is not asked about.
+inline bool labels_unsaved(const AppContext &ctx) {
+    if (ctx.pm.untitled) return !ctx.annotations.empty();
+    if (ctx.pm.keypoints_root_folder.empty()) return false;
+    return !annotations_match(ctx.annotations, ctx.saved_annotations,
+                              ctx.scene ? (int)ctx.scene->num_cams : 0);
+}
+inline bool untitled_unsaved(const AppContext &ctx) { return labels_unsaved(ctx); }
+
+// Write the labels to the project's label folder (a new timestamped one, as
+// Save does), and count them as saved.
+inline bool save_labels_now(AppContext &ctx, std::string *err) {
+    if (ctx.pm.keypoints_root_folder.empty()) {
+        if (err) *err = "This project has no label folder.";
+        return false;
+    }
+    const std::string folder = AnnotationCSV::save_all(
+        ctx.pm.keypoints_root_folder, ctx.skeleton.name, ctx.annotations,
+        ctx.scene ? (int)ctx.scene->num_cams : 0, ctx.skeleton.num_nodes,
+        ctx.pm.camera_names, err, &ctx.pm.annotation_config.label_info);
+    if (folder.empty()) return false;
+    mark_labels_saved(ctx);
+    return true;
+}
+
+inline void close_project(AppContext &ctx, bool save_labels = false) {
+    // 1. Labels are saved only when asked to: whoever closes the project has
+    // already asked the user (run_or_confirm_unsaved), or was told to save.
+    if (save_labels && !ctx.pm.keypoints_root_folder.empty() &&
+        !ctx.annotations.empty()) {
         std::string save_err;
-        AnnotationCSV::save_all(ctx.pm.keypoints_root_folder,
-            ctx.skeleton.name, ctx.annotations,
-            ctx.scene->num_cams, ctx.skeleton.num_nodes,
-            ctx.pm.camera_names, &save_err);
+        save_labels_now(ctx, &save_err);
     }
 
     // 2. Save ImGui ini
@@ -271,10 +474,16 @@ inline void close_project(AppContext &ctx) {
     ctx.skeleton.edges.clear();
     ctx.skeleton.node_names.clear();
 
-    // 6. Reset ProjectManager (preserve nothing)
+    // 6. Reset ProjectManager
     ctx.pm.project_path.clear();
     ctx.pm.project_name.clear();
-    ctx.pm.project_root_path.clear();
+    // Back to the configured defaults, not empty. These two are seeded at
+    // startup and are where the New Project form starts from, so
+    // clearing them meant the first project of a session had them filled in
+    // and every one after it did not -- a required field that silently emptied
+    // itself once you had opened anything.
+    ctx.pm.project_root_path =
+        default_project_root(ctx.user_settings, ctx.default_dir);
     ctx.pm.calibration_folder.clear();
     ctx.pm.keypoints_root_folder.clear();
     ctx.pm.camera_params.clear();
@@ -284,7 +493,6 @@ inline void close_project(AppContext &ctx) {
     ctx.pm.skeleton_file.clear();
     ctx.pm.load_skeleton_from_json = false;
     ctx.pm.plot_keypoints_flag = false;
-    ctx.pm.show_project_window = false;
     ctx.pm.telecentric = false;
     ctx.pm.sync_fix_enabled = false;
     ctx.pm.annotation_config = AnnotationConfig{};
@@ -293,6 +501,7 @@ inline void close_project(AppContext &ctx) {
 
     // 7. Reset display state (project-specific: different videos need different settings)
     ctx.display = DisplayState{};
+    ctx.display.pivot_midgray = ctx.user_settings.default_pivot_midgray;
 
     // 8. Reset frame state
     ctx.current_frame_num = 0;
@@ -333,25 +542,66 @@ inline void on_project_loaded(AppContext &ctx,
     const double t_unload = load_timing::ms(t_stage);
 
     t_stage = load_timing::Clock::now();
-    switch_ini_to_project(ctx);
+    // An Untitled project has no folder to keep a layout in; it stays on the
+    // global one until the first save adopts it (save_untitled_project).
+    if (!ctx.pm.untitled) switch_ini_to_project(ctx);
     const double t_ini = load_timing::ms(t_stage);
     int expected_cameras = (int)ctx.pm.camera_names.size();
-    std::map<std::string, std::string> empty_selected_files;
+    std::map<std::string, std::string> selected_files;
     t_stage = load_timing::Clock::now();
-    load_videos(empty_selected_files, ctx.ps, ctx.pm,
-                ctx.window_was_decoding, ctx.demuxers, ctx.dc_context,
-                ctx.scene, ctx.label_buffer_size, ctx.decoder_threads,
-                ctx.is_view_focused);
+    const MediaKind media_kind = media_kind_from_str(ctx.pm.media_kind);
+    if (media_kind == MediaKind::Video) {
+        load_videos(selected_files, ctx.ps, ctx.pm,
+                    ctx.window_was_decoding, ctx.demuxers, ctx.dc_context,
+                    ctx.scene, ctx.label_buffer_size, ctx.decoder_threads,
+                    ctx.is_view_focused,
+                    ctx.user_settings.default_realtime_playback);
+    } else {
+        // An image project. This branch did not exist: reloading always called
+        // load_videos, so a project made from image folders came back with no
+        // media at all.
+        const bool per_cam = (media_kind == MediaKind::ImagesPerCamera);
+        std::string scan_err;
+        ctx.imgs_names.clear();
+        const bool ok =
+            per_cam ? scan_per_camera_dirs(ctx.pm.media_folder, selected_files,
+                                           &scan_err)
+                    : scan_flat_images(ctx.pm.media_folder, selected_files,
+                                       &scan_err);
+        if (ok) {
+            ctx.pm.camera_names.clear();
+            load_images(selected_files, ctx.ps, ctx.pm, ctx.imgs_names,
+                        ctx.scene, ctx.dc_context, ctx.label_buffer_size,
+                        ctx.decoder_threads, ctx.is_view_focused,
+                        ctx.window_was_decoding,
+                        per_cam ? ImageLayout::PerCameraDir : ImageLayout::Flat,
+                        0.0f, ctx.user_settings.default_realtime_playback);
+            ctx.input_is_imgs = true;
+        } else {
+            ctx.popups.pushError("Could not load this project's images: " +
+                                 scan_err);
+        }
+    }
     const double t_videos = load_timing::ms(t_stage);
     if (print_metadata_fn) print_metadata_fn();
     // The desync fix was requested by the project but the plan could not be
     // built/validated (load_videos already logged why) — playback continues
     // index-paired, which is exactly what the user asked to avoid.
     if (ctx.pm.sync_fix_enabled && !g_sync_fix.plan.usable()) {
-        ctx.toasts.push(
-            "Desync fix is enabled in this project but no usable sync plan "
-            "was found (" + g_sync_fix.plan.error + "). Cameras are "
-            "index-paired.", Toast::Warning, 10.0f);
+        // A project saved before timestamps became a project setting had them
+        // found by a search of the video folder and its parent, which red no
+        // longer does: say where to set them rather than just "not found".
+        if (ctx.pm.timestamps_folder.empty())
+            ctx.toasts.push(
+                "This project has the desync fix on, but no camera timestamps "
+                "folder is set -- red no longer searches for them. Set it in "
+                "Project > Camera Timestamps. Cameras are index-paired until "
+                "then.", Toast::Warning, 15.0f);
+        else
+            ctx.toasts.push(
+                "Desync fix is enabled in this project but no usable sync "
+                "plan was found (" + g_sync_fix.plan.error + "). Cameras are "
+                "index-paired.", Toast::Warning, 10.0f);
     }
     int loaded_cameras = (int)ctx.pm.camera_names.size();
     if (loaded_cameras < expected_cameras) {
@@ -385,11 +635,13 @@ inline void on_project_loaded(AppContext &ctx,
         if (AnnotationCSV::load_all(most_recent_folder, ctx.annotations,
                                       ctx.skeleton.name,
                                       ctx.skeleton.num_nodes, num_cameras,
-                                      ctx.pm.camera_names, label_err)) {
+                                      ctx.pm.camera_names, label_err,
+                                      &ctx.pm.annotation_config.label_info)) {
             ctx.popups.pushError(label_err);
             ctx.annotations.clear();
         }
     }
+    mark_labels_saved(ctx);   // as loaded: nothing unsaved yet
     const double t_labels = load_timing::ms(t_stage);
 
     if (load_timing::enabled())
@@ -401,10 +653,114 @@ inline void on_project_loaded(AppContext &ctx,
 
     if (print_summary_fn) print_summary_fn(most_recent_folder);
 
-    // Track in recent projects
-    if (!ctx.pm.project_path.empty()) {
-        std::string redproj = ctx.pm.project_path + "/" + ctx.pm.project_name + ".redproj";
-        ctx.user_settings.push_recent_project(redproj);
-        save_user_settings(ctx.user_settings);
+    // Track in recent projects. The path is the file that was opened, when
+    // that is known: rebuilding it from project_path + project_name is only
+    // right when the file is named after the project, which red's own creation
+    // path guarantees and a hand-made or older "project.redproj" does not. The
+    // rebuilt path then pointed at nothing, and the welcome screen -- which
+    // drops entries that do not exist -- showed the project as missing the
+    // moment you reopened red.
+    {
+        std::string redproj = ctx.pm.source_file;
+        if (redproj.empty() && !ctx.pm.project_path.empty())
+            redproj = ctx.pm.project_path + "/" + ctx.pm.project_name + ".redproj";
+        if (!redproj.empty()) {
+            ctx.user_settings.push_recent_project(redproj);
+            // Where its folder sits: where project dialogs start next time.
+            const std::string root = std::filesystem::path(redproj)
+                                         .parent_path().parent_path().string();
+            if (!root.empty()) ctx.user_settings.last_project_root = root;
+            save_user_settings(ctx.user_settings);
+        }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Untitled projects. New Project opens one with no name, folder
+// or .redproj; the first save (Cmd+S, File > Save, the toolbar) opens
+// Save Project, which names it and makes its folder. Its labels live only in
+// memory until then, and there is no auto-save, so nothing that replaces the
+// project may drop them without asking.
+// ---------------------------------------------------------------------------
+
+// Labels that exist nowhere on disk.
+// Run `action` -- which replaces the current project or quits -- now, or, if
+// that would lose unsaved labels (labels_unsaved), once the user has chosen in
+// the Save / Don't Save / Cancel prompt (HandleMainMenuDialogs). Don't Save
+// drops the changes before running it, and Save runs it after the save, so an
+// action that guards itself with this passes the second time through.
+inline void run_or_confirm_unsaved(AppContext &ctx, std::function<void()> action) {
+    if (!labels_unsaved(ctx)) {
+        action();
+        return;
+    }
+    ctx.unsaved_action = std::move(action);
+    ctx.unsaved_prompt = true;
+}
+
+// Give an Untitled project its name and folder: <location>/<name>/ with the
+// .redproj and labeled_data/ (holding the labels so far), add it to Recent
+// Projects, remember the location for the next one, and adopt the layout on
+// screen as the project's. On failure the project stays Untitled.
+// Why <location>/<name>/ cannot take a new project, or "" when it can.
+// The Save Project dialog shows this as the user types.
+inline std::string untitled_save_problem(const std::string &name,
+                                         const std::string &location) {
+    namespace fs = std::filesystem;
+    if (name.empty())
+        return "Type a name for the project's folder.";
+    if (name.find_first_of("/\\:") != std::string::npos)
+        return "The name cannot contain / \\ or :";
+    if (location.empty())
+        return "Choose where to save it.";
+    const fs::path dir = fs::path(location) / name;
+    std::error_code ec;
+    if (fs::exists(dir, ec) && !(fs::is_directory(dir, ec) && fs::is_empty(dir, ec)))
+        return "\"" + name + "\" is already here. Choose another name or "
+               "go to another folder.";
+    return "";
+}
+
+inline bool save_untitled_project(AppContext &ctx, const std::string &name,
+                                  const std::string &location, std::string *err) {
+    namespace fs = std::filesystem;
+    if (std::string why = untitled_save_problem(name, location); !why.empty()) {
+        *err = why;
+        return false;
+    }
+    const fs::path dir = fs::path(location) / name;
+
+    const ProjectManager before = ctx.pm;
+    auto fail = [&](const std::string &why) {
+        ctx.pm = before;
+        *err = why;
+        return false;
+    };
+    ProjectManager &pm = ctx.pm;
+    pm.project_name = name;
+    pm.project_root_path = location;
+    pm.project_path = dir.string();
+    pm.keypoints_root_folder = (dir / "labeled_data").string();
+    pm.untitled = false;
+    std::string e;
+    if (!ensure_dir_exists(pm.project_path, &e) ||
+        !ensure_dir_exists(pm.keypoints_root_folder, &e))
+        return fail("Could not create " + dir.string() + ": " + e);
+    const std::string redproj = (dir / (name + ".redproj")).string();
+    if (!save_project_manager_json(pm, redproj, &e))
+        return fail("Could not write the project file: " + e);
+    if (!ctx.annotations.empty()) {
+        const std::string saved = AnnotationCSV::save_all(
+            pm.keypoints_root_folder, ctx.skeleton.name, ctx.annotations,
+            ctx.scene ? (int)ctx.scene->num_cams : 0, ctx.skeleton.num_nodes,
+            pm.camera_names, &e, &pm.annotation_config.label_info);
+        if (saved.empty()) return fail("Could not save the labels: " + e);
+    }
+    mark_labels_saved(ctx);
+
+    ctx.user_settings.push_recent_project(redproj);
+    ctx.user_settings.last_project_root = location;
+    save_user_settings(ctx.user_settings);
+    switch_ini_to_project(ctx);   // a fresh layout file adopts the live one
+    return true;
 }

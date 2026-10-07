@@ -1,4 +1,5 @@
 #pragma once
+#include "video_files.h"
 #include "ffmpeg_frame_reader.h"
 #include "json.hpp"
 #include "opencv_yaml_io.h"
@@ -148,9 +149,22 @@ inline bool resolve_export_image_dims(const ExportConfig &config,
 // CSV readers — match data_exporter/utils.py
 // ---------------------------------------------------------------------------
 
+// Columns between `frame` and the first keypoint's x0: none in v2, instance in
+// v3, class and instance in v4. Read off the column header.
+inline size_t red_csv_id_columns(const std::string &header) {
+    std::stringstream ss(header);
+    std::string col;
+    size_t i = 0;
+    while (std::getline(ss, col, ',')) {
+        if (col.rfind("x", 0) == 0) return i > 0 ? i - 1 : 0;
+        ++i;
+    }
+    return 0;
+}
+
 // 3D CSV: Reads both v1 and v2 formats.
 //   v1: skeleton_name header, then frame,idx,x,y,z,idx,x,y,z,...  (groups of 4)
-//   v2: #red_csv v2 + #skeleton + column header, then frame,x,y,z,c,x,y,z,c,... (groups of 4)
+//   v2+: #red_csv + #skeleton + column header, then frame,[class,][instance,]x,y,z,c,... (groups of 4)
 // Returns map of frame_id -> Nx3 vector. Frames with any 1e7/empty sentinel are excluded.
 inline std::map<int, std::vector<std::vector<double>>>
 read_csv_3d(const std::string &path) {
@@ -161,6 +175,7 @@ read_csv_3d(const std::string &path) {
 
     std::string line;
     bool is_v2 = false;
+    size_t id_cols = 0;   // class/instance columns after frame (v3, v4)
 
     // Read first line to detect format
     if (!std::getline(file, line))
@@ -173,7 +188,10 @@ read_csv_3d(const std::string &path) {
         // Skip #skeleton line and column header line
         while (std::getline(file, line)) {
             if (line.empty() || line[0] == '#') continue;
-            if (line.find("frame,") == 0 || line.find("frame ") == 0) continue;
+            if (line.find("frame,") == 0 || line.find("frame ") == 0) {
+                id_cols = red_csv_id_columns(line);
+                continue;
+            }
             break; // first data line
         }
         // Process this first data line, then continue loop
@@ -205,6 +223,12 @@ parse_line:
             try { values.push_back(std::stod(token)); }
             catch (...) { values.push_back(1e7); }
         }
+        // One animal: JARVIS takes the first row of each frame.
+        if (id_cols) {
+            if (result.count(frame_id)) continue;
+            values.erase(values.begin(),
+                         values.begin() + std::min(id_cols, values.size()));
+        }
 
         // v1: groups of 4 (idx, x, y, z) — skip idx
         // v2: groups of 4 (x, y, z, c) — skip c
@@ -235,7 +259,7 @@ parse_line:
 
 // 2D CSV: Reads both v1 and v2 formats.
 //   v1: skeleton_name header, then frame,idx,x,y,idx,x,y,...  (groups of 3)
-//   v2: #red_csv v2 + #skeleton + column header, then frame,x,y,c,s,x,y,c,s,...  (groups of 4)
+//   v2+: #red_csv + #skeleton + column header, then frame,[class,][instance,]x,y,c,s,...  (groups of 4)
 // Applies Y-flip: y = img_height - y (converts ImPlot bottom-left to image top-left)
 // Returns map of frame_id -> Nx2 vector. Unlabeled sentinels → NaN.
 inline std::map<int, std::vector<std::vector<double>>>
@@ -247,6 +271,7 @@ read_csv_2d(const std::string &path, int img_height) {
 
     std::string line;
     bool is_v2 = false;
+    size_t id_cols = 0;   // class/instance columns after frame (v3, v4)
 
     // Read first line to detect format
     if (!std::getline(file, line))
@@ -258,7 +283,10 @@ read_csv_2d(const std::string &path, int img_height) {
     if (is_v2) {
         while (std::getline(file, line)) {
             if (line.empty() || line[0] == '#') continue;
-            if (line.find("frame,") == 0 || line.find("frame ") == 0) continue;
+            if (line.find("frame,") == 0 || line.find("frame ") == 0) {
+                id_cols = red_csv_id_columns(line);
+                continue;
+            }
             break; // first data line
         }
         if (line.empty()) return result;
@@ -295,6 +323,13 @@ parse_line:
                     cell_empty.push_back(true);
                 }
             }
+        }
+        // One animal: JARVIS takes the first row of each frame.
+        if (id_cols) {
+            if (result.count(frame_id)) continue;
+            const size_t n = std::min(id_cols, values.size());
+            values.erase(values.begin(), values.begin() + n);
+            cell_empty.erase(cell_empty.begin(), cell_empty.begin() + n);
         }
 
         std::vector<std::vector<double>> kps;
@@ -941,11 +976,11 @@ inline nlohmann::json generate_annotation_json_from_amap(
             // Check if all 2D keypoints are valid for this camera on this frame
             bool has_valid_2d = false;
             auto it = amap.find((u32)frame_num);
-            if (it != amap.end() && cam_idx < (int)it->second.cameras.size()) {
-                const auto &cam = it->second.cameras[cam_idx];
+            if (it != amap.end() && !it->second.empty() && cam_idx < (int)it->second.front().cameras.size()) {
+                const auto &cam = it->second.front().cameras[cam_idx];
                 bool any_unlabeled = false;
                 for (int k = 0; k < config.num_keypoints && k < (int)cam.keypoints.size(); ++k) {
-                    if (!cam.keypoints[k].labeled) { any_unlabeled = true; break; }
+                    if (!cam.keypoints[k].usable()) { any_unlabeled = true; break; }
                 }
                 if (!any_unlabeled && !cam.keypoints.empty())
                     has_valid_2d = true;
@@ -953,7 +988,7 @@ inline nlohmann::json generate_annotation_json_from_amap(
 
             nlohmann::json annotation_entry;
             if (has_valid_2d) {
-                const auto &cam = it->second.cameras[cam_idx];
+                const auto &cam = it->second.front().cameras[cam_idx];
 
                 // Compute bbox from 2D keypoints + margin (Y-flipped to image coords)
                 double x_min = 1e9, x_max = -1e9, y_min = 1e9, y_max = -1e9;
@@ -1091,7 +1126,11 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
 
     // 1. Get valid frames from AnnotationMap (all 3D keypoints triangulated)
     std::vector<int> valid_frames;
-    for (const auto &[fid, fa] : amap) {
+    for (const auto &[fid, fis] : amap) {
+        // Single-animal format: the first instance. Multi-animal
+        // export goes through tailcycle, which the format supports.
+        if (fis.empty()) continue;
+        const FrameAnnotation &fa = fis.front();
         if (frame_is_fully_triangulated(fa, config.num_keypoints))
             valid_frames.push_back((int)fid);
     }
@@ -1180,7 +1219,7 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
     std::vector<std::thread> threads;
     for (const auto &cam : config.camera_names) {
         std::string video_path =
-            config.media_folder + "/" + cam + ".mp4";
+            camera_video_path(config.media_folder, cam);
         threads.emplace_back(extract_jpegs_for_camera, cam, trial_name,
                              video_path, config.output_folder, train_frames,
                              val_frames, frame_to_mode, status, &status_mutex,
@@ -1349,7 +1388,7 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
     std::vector<std::thread> threads;
     for (const auto &cam : config.camera_names) {
         std::string video_path =
-            config.media_folder + "/" + cam + ".mp4";
+            camera_video_path(config.media_folder, cam);
         threads.emplace_back(extract_jpegs_for_camera, cam, trial_name,
                              video_path, config.output_folder, train_frames,
                              val_frames, frame_to_mode, status, &status_mutex,

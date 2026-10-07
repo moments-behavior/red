@@ -22,11 +22,18 @@ if not defined VSPATH (
     echo ERROR: no Visual Studio installation with the C++ toolset was found.
     exit /b 1
 )
+rem vcvars64.bat exports its own VCPKG_ROOT, pointing at the vcpkg that ships
+rem inside Visual Studio. That one is manifest-mode only and has none of the
+rem packages a classic-mode clone has installed, so it silently replaces the
+rem caller's choice with an empty one. Remember the caller's value across the
+rem call and put it back.
+set "VCPKG_ROOT_CALLER=%VCPKG_ROOT%"
 call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" >nul
 if errorlevel 1 (
     echo ERROR: vcvars64.bat failed.
     exit /b 1
 )
+if defined VCPKG_ROOT_CALLER set "VCPKG_ROOT=%VCPKG_ROOT_CALLER%"
 
 rem --- Prefer the CMake and Ninja that ship with Visual Studio ------------
 rem VS bundles CMake 3.31. Standalone CMake 4.x dropped the MSVC 19.44
@@ -35,13 +42,19 @@ set "VSCMAKE=%VSPATH%\Common7\IDE\CommonExtensions\Microsoft\CMake"
 if exist "%VSCMAKE%\CMake\bin\cmake.exe" set "PATH=%VSCMAKE%\CMake\bin;%VSCMAKE%\Ninja;%PATH%"
 
 rem --- CUDA: the installer sets CUDA_PATH; CMakeLists.txt reads it -------
-if not defined CUDA_PATH (
-    echo ERROR: CUDA_PATH is not set. Install the CUDA Toolkit ^(12.x^), or set
-    echo        it manually, e.g. set CUDA_PATH=C:\Program Files\NVIDIA GPU
-    echo        Computing Toolkit\CUDA\v12.6
-    exit /b 1
+rem Not needed for the software-decode build:  build.bat -DRED_ENABLE_CUDA=OFF
+set "RED_NO_CUDA_BUILD="
+echo %* | findstr /i /c:"RED_ENABLE_CUDA=OFF" >nul && set "RED_NO_CUDA_BUILD=1"
+if not defined RED_NO_CUDA_BUILD (
+    if not defined CUDA_PATH (
+        echo ERROR: CUDA_PATH is not set. Install the CUDA Toolkit ^(12.x^), or set
+        echo        it manually, e.g. set CUDA_PATH=C:\Program Files\NVIDIA GPU
+        echo        Computing Toolkit\CUDA\v12.6
+        echo        Or build without CUDA:  build.bat -DRED_ENABLE_CUDA=OFF
+        exit /b 1
+    )
+    set "PATH=!CUDA_PATH!\bin;!PATH!"
 )
-set "PATH=%CUDA_PATH%\bin;%PATH%"
 
 rem --- vcpkg: every Windows dependency comes from here ------------------
 rem Looked for as VCPKG_ROOT, then the vcpkg on PATH, then the usual clone
@@ -82,11 +95,37 @@ if not defined FFMPEG_ROOT (
 )
 
 echo Using vcpkg:  %VCPKG_ROOT%
-echo Using CUDA:   %CUDA_PATH%
+if defined RED_NO_CUDA_BUILD (echo Using CUDA:   no -- software decoding) else (echo Using CUDA:   %CUDA_PATH%)
 echo Using FFmpeg: %FFMPEG_ROOT%
-set "TOOLCHAIN=-DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT:\=/%/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows -DCMAKE_PREFIX_PATH=%FFMPEG_ROOT:\=/%"
+rem Each -D is quoted as one whole token. Without that a path containing a
+rem space -- Visual Studio's bundled vcpkg lives under "C:\Program Files" --
+rem splits into two arguments, and CMake reports the memorable
+rem "Could not find toolchain file: C:/Program".
+set "VCPKG_TC=%VCPKG_ROOT:\=/%/scripts/buildsystems/vcpkg.cmake"
+set "FFMPEG_PREFIX=%FFMPEG_ROOT:\=/%"
 
-cmake -G Ninja -B release -DCMAKE_BUILD_TYPE=Release %TOOLCHAIN% %*
+rem --- stale cache -------------------------------------------------------
+rem A Visual Studio update installs a new MSVC toolset and removes the old
+rem one, leaving release\CMakeCache.txt pointing at a cl.exe that no longer
+rem exists. CMake cannot re-detect a compiler in an existing cache, so it
+rem stops with "is not a full path to an existing compiler tool" and the only
+rem fix is deleting the cache -- which is not what that message suggests.
+if exist "release\CMakeCache.txt" (
+    set "CACHED_CXX="
+    for /f "usebackq tokens=2 delims==" %%i in (`findstr /b "CMAKE_CXX_COMPILER:" "release\CMakeCache.txt"`) do set "CACHED_CXX=%%i"
+    if defined CACHED_CXX (
+        set "CACHED_CXX=!CACHED_CXX:/=\!"
+        if not exist "!CACHED_CXX!" (
+            echo Stale cache: !CACHED_CXX! is gone. Reconfiguring from scratch.
+            rmdir /s /q release
+        )
+    )
+)
+
+cmake -G Ninja -B release -DCMAKE_BUILD_TYPE=Release ^
+    "-DCMAKE_TOOLCHAIN_FILE=%VCPKG_TC%" ^
+    -DVCPKG_TARGET_TRIPLET=x64-windows ^
+    "-DCMAKE_PREFIX_PATH=%FFMPEG_PREFIX%" %*
 if errorlevel 1 exit /b 1
 cmake --build release
 if errorlevel 1 exit /b 1

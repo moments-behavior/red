@@ -1,4 +1,5 @@
 #include "decoder.h"
+#include "fatal_handler.h"
 #include "decode_backend.h"
 #include "global.h"
 #include "sw_decoder.h"
@@ -93,6 +94,12 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                                  bool use_cpu_buffer,
                                  const sync_plan::SyncCam *sync_cam) {
   try {
+    // See sw_decoder.cpp: nFrame is a POSITION seeded from the seek target,
+    // which is never clamped to the stream, so a camera seeked past its end
+    // would label the frames it emits with numbers it does not have. Every
+    // consumer reads those as truth and the camera then looks current while
+    // showing its last image.
+    const int cam_len_slot = dc_context->cam_slot(cam_name);
     CUdeviceptr pTmpImage = 0;
     ck(cuInit(0));
     CUcontext cuContext = NULL;
@@ -123,16 +130,10 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
     bool have_content = false;      // pTmpImage holds a frame of this epoch
     bool first_store_done = false;
 
-    double video_length = demuxer->GetDuration();
-    double frame_rate = demuxer->GetFramerate();
-    // In sync mode the loader owns total/estimated (both = canonical_len).
-    if (!sync_on) {
-        if (demuxer->GetNumFrames() == 0) {
-            dc_context->estimated_num_frames = int(video_length * frame_rate);
-        } else {
-            dc_context->estimated_num_frames = demuxer->GetNumFrames() - 1;
-        }
-    }
+    // In sync mode the loader owns total_num_frame (canonical_len) and
+    // last_frame_index (canonical_len - 1).
+    // Otherwise the loader has already set last_frame_index from the
+    // reference camera; decoder threads must not race to replace it.
     int size_in_bytes;
     bool skip_first_decode_after_seek = false;
     // The seek block identifies the target frame by timestamp, which means
@@ -295,10 +296,23 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                         demuxer->Demux(pVideo, nVideoBytes, pktinfo);
                     if (!demux_success) {
                         std::cout << "Demux error..." << std::endl;
+                        // ENDOFSTREAM, not DISCONTINUITY: only the former
+                        // tells NVDEC this is the last packet and makes it
+                        // give up the frames still held for reordering.
+                        // Discontinuity says "there is a gap" and keeps them,
+                        // so a camera stopped short of its own end -- 237 of
+                        // 240. The post-seek flush above is a real
+                        // discontinuity and stays one.
                         nFrameReturned =
-                            dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
-                        if (!sync_on)
-                            dc_context->total_num_frame = nFrame + nFrameReturned;
+                            dec.Decode(NULL, 0, CUVID_PKT_ENDOFSTREAM);
+                        if (!sync_on) {
+                            if (dc_context->total_owned_by_loader)
+                                dc_context->refine_cam_length(
+                                    cam_name, nFrame + nFrameReturned);
+                            else
+                                dc_context->set_frame_count(
+                                    nFrame + nFrameReturned);
+                        }
                     } else {
                         nFrameReturned = dec.Decode(pVideo, nVideoBytes, 0, pktinfo.pts);
                         RED_SEEKDBG("  packet pts=%lld -> %d frames "
@@ -336,7 +350,12 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                 latest_decoded_frame[cam_name].store((int)target);
             } else {
                 nFrame = seek_info->seek_frame;
-                latest_decoded_frame[cam_name].store(seek_info->seek_frame);
+                const int cam_len = dc_context->cam_frames(cam_len_slot);
+                const int landed =
+                    (cam_len > 0 && (int)seek_info->seek_frame > cam_len - 1)
+                        ? cam_len - 1
+                        : (int)seek_info->seek_frame;
+                latest_decoded_frame[cam_name].store(landed);
             }
             first_store_done = true;
             display_buffer[0].frame_number = -1;
@@ -371,7 +390,10 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                     have_content = true;
                     if (store_slot(next_slot, false)) next_slot++;
                 } else {
-                    if (!store_slot(nFrame, false))
+                    const int cam_len = dc_context->cam_frames(cam_len_slot);
+                    if (cam_len > 0 && nFrame >= cam_len)
+                        RED_SEEKDBG("past this camera's end, not published");
+                    else if (!store_slot(nFrame, false))
                         RED_SEEKDBG("target store rejected");
                 }
                 last_published_pts = land_ts;
@@ -403,8 +425,11 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                     if (sync_on) {
                         if (!store_slot(next_slot, false)) break;
                         next_slot++;
-                    } else if (!store_slot(nFrame, false)) {
-                        break;
+                    } else {
+                        const int cam_len =
+                            dc_context->cam_frames(cam_len_slot);
+                        if (cam_len > 0 && nFrame >= cam_len) break;
+                        if (!store_slot(nFrame, false)) break;
                     }
                     nFrame++;
                 }
@@ -419,10 +444,18 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                     demux_success =
                         demuxer->Demux(pVideo, nVideoBytes, pktinfo);
                     if (!demux_success) {
+                        // End of stream: see the note above -- ENDOFSTREAM is
+                        // what flushes NVDEC's reorder queue.
                         nFrameReturned =
-                            dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
-                        if (!sync_on)
-                            dc_context->total_num_frame = nFrame + nFrameReturned;
+                            dec.Decode(NULL, 0, CUVID_PKT_ENDOFSTREAM);
+                        if (!sync_on) {
+                            if (dc_context->total_owned_by_loader)
+                                dc_context->refine_cam_length(
+                                    cam_name, nFrame + nFrameReturned);
+                            else
+                                dc_context->set_frame_count(
+                                    nFrame + nFrameReturned);
+                        }
                     } else {
                         nFrameReturned = dec.Decode(pVideo, nVideoBytes, 0, pktinfo.pts);
                     }
@@ -459,7 +492,10 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                             pFrame, dec.GetWidth(), (uint8_t *)pTmpImage,
                             4 * dec.GetWidth(), dec.GetWidth(),
                             dec.GetHeight(), iMatrix);
-                        store_slot(nFrame, false);
+                        const int cam_len =
+                            dc_context->cam_frames(cam_len_slot);
+                        if (cam_len <= 0 || nFrame < cam_len)
+                            store_slot(nFrame, false);
                         nFrame = nFrame + 1;
                     } else {
                         int64_t c = sync_cam->slot_of_pos(nFrame);
@@ -569,6 +605,9 @@ static void vt_decoder_process(DecoderContext *dc_context,
                               bool /*use_cpu_buffer*/,
                               const sync_plan::SyncCam *sync_cam) {
   try {
+    // As in nvdec_decoder_process above: never publish a frame number this
+    // camera does not have.
+    const int cam_len_slot = dc_context->cam_slot(cam_name);
     // Run on performance cores
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
 
@@ -579,16 +618,11 @@ static void vt_decoder_process(DecoderContext *dc_context,
 
     int w = (int)demuxer->GetWidth();
     int h = (int)demuxer->GetHeight();
-    double video_length = demuxer->GetDuration();
-    double frame_rate   = demuxer->GetFramerate();
     double timebase     = demuxer->GetTimebase();
-    // In sync mode the loader owns total/estimated (both = canonical_len).
-    if (!sync_on) {
-        if (demuxer->GetNumFrames() == 0)
-            dc_context->estimated_num_frames = (int)(video_length * frame_rate);
-        else
-            dc_context->estimated_num_frames = (int)demuxer->GetNumFrames() - 1;
-    }
+    // In sync mode the loader owns total_num_frame (canonical_len) and
+    // last_frame_index (canonical_len - 1).
+    // Otherwise the loader has already set last_frame_index from the
+    // reference camera; decoder threads must not race to replace it.
 
     (void)w; (void)h;  // used by caller via scene->image_width/height
 
@@ -660,6 +694,12 @@ static void vt_decoder_process(DecoderContext *dc_context,
     // -----------------------------------------------------------------------
     auto store_frame = [&](CVPixelBufferRef pb, int frame_num) {
         if (!sync_on) {
+            const int cam_len = dc_context->cam_frames(cam_len_slot);
+            if (cam_len > 0 && frame_num >= cam_len) {
+                CFRelease(pb);  // ours to release, as in the stale-frame case
+                nFrame++;
+                return true;
+            }
             if (!store_slot(pb, frame_num, false)) return false;
             nFrame++;
             return true;
@@ -837,24 +877,40 @@ static void vt_decoder_process(DecoderContext *dc_context,
                           timebase, (pktinfo.flags & AV_PKT_FLAG_KEY) != 0);
             packets_in_flight++;
             eof_stall = 0;
-        } else if (!sync_on) {
-            // End of stream
-            dc_context->total_num_frame = nFrame;
-        } else if (packets_in_flight > 0 && eof_stall < 100) {
-            // End of stream but async decodes are still in flight — filling
-            // now would make the late real frames look stale and get dropped.
-            eof_stall++;
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         } else {
-            // End of stream, sync mode: total_num_frame is owned by the
-            // loader (= canonical_len). Trailing fill: a camera whose span
-            // ends before canonical_len must keep publishing duplicate slots,
-            // or the shared min-decoded playback cap would freeze at its last
-            // real frame and stall every camera.
-            while (next_slot < canonical_len && held_pb) {
-                CFRetain(held_pb);
-                if (!store_slot(held_pb, next_slot, true)) break;
-                next_slot++;
+            // End of stream. First, let the decoder give up the frames it is
+            // still holding back for reordering. pop_next() withholds until
+            // it has REORDER_DEPTH (8) in hand -- that is how it guarantees
+            // PTS order out of a min-heap -- so the last few never come out
+            // on their own and the camera silently loses its tail. A
+            // 240-frame camera published 232 and stopped there. Idempotent,
+            // so calling it on each iteration while stalled here is fine.
+            vt_dec.drain_at_eos();
+
+            if (packets_in_flight > 0 && eof_stall < 100) {
+                // Async decodes still in flight. Waited in EITHER mode: this
+                // test used to sit after the !sync_on branch below, so normal
+                // playback never reached it. In sync mode it also matters
+                // that filling now would make the late real frames look stale
+                // and get dropped.
+                eof_stall++;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            } else if (!sync_on) {
+                if (dc_context->total_owned_by_loader)
+                    dc_context->refine_cam_length(cam_name, nFrame);
+                else
+                    dc_context->set_frame_count(nFrame);
+            } else {
+                // Sync mode: total_num_frame is owned by the loader (=
+                // canonical_len). Trailing fill -- a camera whose span ends
+                // before canonical_len must keep publishing duplicate slots,
+                // or the shared min-decoded playback cap would freeze at its
+                // last real frame and stall every camera.
+                while (next_slot < canonical_len && held_pb) {
+                    CFRetain(held_pb);
+                    if (!store_slot(held_pb, next_slot, true)) break;
+                    next_slot++;
+                }
             }
         }
 
@@ -898,6 +954,7 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                      int size_of_buffer, SeekInfo *seek_info,
                      bool use_cpu_buffer,
                      const sync_plan::SyncCam *sync_cam) {
+    install_fatal_handler();  // per thread on MSVC
 #if defined(RED_HAVE_CUDA) || defined(__APPLE__)
     if (red::decode_backend() == red::DecodeBackend::Hardware) {
 #if defined(RED_HAVE_CUDA)
@@ -982,7 +1039,7 @@ static inline bool load_image_rgba(const std::string &file_name,
             }
         }
     }
-    // Fallback to stbi for non-JPEG formats (PNG, TIFF, etc.)
+    // Fallback to stbi for non-JPEG formats (PNG, BMP; stb_image has no TIFF)
     int w, h, ch;
     unsigned char *data = stbi_load(file_name.c_str(), &w, &h, &ch, 4);
     if (!data) return false;
@@ -1011,11 +1068,12 @@ void image_loader(DecoderContext *dc_context,
                   PictureBuffer *display_buffer, int size_of_buffer,
                   SeekInfo *seek_info, bool use_cpu_buffer,
                   std::string cam_name, std::string root_dir,
-                  std::string file_ext) {
+                  std::string file_ext, ImageLayout layout) {
+    install_fatal_handler();  // per thread on MSVC
     int buffer_head = 0;
     int frame_number = 0;
-    dc_context->total_num_frame = img_list_vector.size();
-    dc_context->estimated_num_frames = img_list_vector.size();
+    // load_images initializes the shared frame count before starting one
+    // loader thread per camera; do not race-write it here.
     while (!(dc_context->stop_flag)) {
         if (seek_info->use_seek) {
             // reset the display buffer after seeking
@@ -1031,9 +1089,9 @@ void image_loader(DecoderContext *dc_context,
         } else {
             if (frame_number < (int)img_list_vector.size()) {
                 if (frame_number == 0) {
-                    std::string file_name = root_dir + "/" + cam_name + "_" +
-                                            img_list_vector[frame_number] +
-                                            "." + file_ext;
+                    std::string file_name = image_frame_path(
+                            root_dir, cam_name, img_list_vector[frame_number],
+                            file_ext, layout);
                     load_image_rgba(file_name,
                                     display_buffer[buffer_head].frame, nullptr);
                     display_buffer[buffer_head].available_to_write = false;
@@ -1045,9 +1103,9 @@ void image_loader(DecoderContext *dc_context,
                         std::this_thread::sleep_for(
                             std::chrono::milliseconds(1));
                     }
-                    std::string file_name = root_dir + "/" + cam_name + "_" +
-                                            img_list_vector[frame_number] +
-                                            "." + file_ext;
+                    std::string file_name = image_frame_path(
+                            root_dir, cam_name, img_list_vector[frame_number],
+                            file_ext, layout);
                     load_image_rgba(file_name,
                                     display_buffer[buffer_head].frame, nullptr);
                     display_buffer[buffer_head].available_to_write = false;

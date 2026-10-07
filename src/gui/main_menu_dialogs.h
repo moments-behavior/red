@@ -1,6 +1,9 @@
 #pragma once
+#include "decode_backend.h"
 #include "app_context.h"
+#include "gui/tailcycle_open_window.h"
 #include "gui/window_states.h"
+#include "gui/folder_dialog.h"
 #include <ImGuiFileDialog.h>
 #include <filesystem>
 
@@ -14,6 +17,41 @@ inline void load_project_from_path(
     std::function<void(const std::string &)> print_summary_fn,
     std::function<void()> nuke_inference_fn = nullptr) {
     auto &pm = ctx.pm;
+
+    // Opening another project replaces this one: ask about unsaved labels
+    // first. The prompt calls back here once settled.
+    if (labels_unsaved(ctx)) {
+        run_or_confirm_unsaved(ctx, [&ctx, &win, cfg_path, print_metadata_fn,
+                                     print_summary_fn, nuke_inference_fn]() {
+            load_project_from_path(ctx, win, cfg_path, print_metadata_fn,
+                                   print_summary_fn, nuke_inference_fn);
+        });
+        return;
+    }
+
+    // A tailcycle session is a directory holding a session.toml, not a
+    // .redproj. Recents carry both, so route by what is actually there rather
+    // than asking the caller to know which kind of path it has.
+    if (std::filesystem::is_directory(cfg_path)) {
+        if (std::filesystem::exists(cfg_path / "session.toml")) {
+            std::string status;
+            if (!tailcycle_open_session(ctx, cfg_path.string(), std::string(), &status))
+                ctx.popups.pushError(status);
+            else
+                ctx.toasts.pushSuccess(status);
+            return;
+        }
+        // A dataset root: show the browser pointed at it rather than guessing
+        // which session was meant. The panel rescans when its root changes.
+        std::vector<TailcycleImport::SessionInfo> probe;
+        std::string err;
+        if (TailcycleImport::scan_dataset(cfg_path.string(), &probe, &err)) {
+            // Setting the root is the whole action: tailcycle_pump sees it
+            // change, scans, and opens the first session.
+            win.tailcycle_open.root = cfg_path.string();
+            return;
+        }
+    }
 
     // Legacy calibration projects share the .redproj extension; detect them so
     // the failure is explicit rather than a confusing parse error from the
@@ -41,7 +79,9 @@ inline void load_project_from_path(
         ctx.popups.pushError(err);
         return;
     }
-    close_project(ctx);
+    // Any save was settled before this point (the prompt above, or the
+    // Camera Timestamps choice), so closing does not write labels.
+    close_project(ctx, false);
     win.reset();
     if (nuke_inference_fn) nuke_inference_fn();
     pm = loaded;
@@ -107,43 +147,272 @@ inline void HandleMainMenuDialogs(
                 ImGuiFileDialog::Instance()->GetCurrentPath();
             user_settings.default_media_root_path = chosen;
             pm.media_folder = chosen;
-            annot_state.video_folder = chosen;
+            annot_state.media_folder = chosen;
             save_user_settings(user_settings);
         }
         ImGuiFileDialog::Instance()->Close();
     }
 
-    // ChooseMedia (Open Video)
-    if (ImGuiFileDialog::Instance()->Display("ChooseMedia", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+    // --- Untitled projects -------------------------------------------------
+    // Something would replace an Untitled project whose labels are only in
+    // memory (run_or_confirm_unsaved): ask what to do with them.
+    if (ctx.unsaved_prompt) {
+        ImGui::OpenPopup("Unsaved Project##unsaved");
+        ctx.unsaved_prompt = false;
+    }
+    if (ImGui::BeginPopupModal("Unsaved Project##unsaved", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted(pm.untitled
+                                   ? "This Untitled project has labels that have "
+                                     "not been saved."
+                                   : "This project has label changes that have "
+                                     "not been saved.");
+        ImGui::Spacing();
+        // Untitled: name it first (Save Project), then go on. Saved before:
+        // write the labels now, then go on.
+        if (ImGui::Button(pm.untitled ? "Save..." : "Save")) {
+            if (pm.untitled) {
+                ctx.after_save_action = std::move(ctx.unsaved_action);
+                ctx.unsaved_action = nullptr;
+                ctx.save_project_prompt = true;
+                ImGui::CloseCurrentPopup();
+            } else {
+                std::string err;
+                if (save_labels_now(ctx, &err)) {
+                    auto action = std::move(ctx.unsaved_action);
+                    ctx.unsaved_action = nullptr;
+                    ImGui::CloseCurrentPopup();
+                    if (action) action();
+                } else {
+                    ctx.unsaved_action = nullptr;
+                    ImGui::CloseCurrentPopup();
+                    ctx.popups.pushError("Could not save the labels: " + err);
+                }
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Don't Save")) {
+            auto action = std::move(ctx.unsaved_action);
+            ctx.unsaved_action = nullptr;
+            // Dropped: the changes are let go, and the action now goes through.
+            if (pm.untitled) ctx.annotations.clear();
+            else mark_labels_saved(ctx);
+            ImGui::CloseCurrentPopup();
+            if (action) action();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            ctx.unsaved_action = nullptr;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    // Save Project: one file browser -- go to where the project should live,
+    // keep or change the folder name. Makes <there>/<name>/ holding
+    // <name>.redproj and labeled_data/.
+    auto open_save_dialog = [&](const std::string &dir, const std::string &name) {
+        IGFD::FileDialogConfig cfg;
+        cfg.path = dir;
+        cfg.fileName = name;
+        cfg.flags = ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_HideColumnType;
+        // No filter (""): no type list beside the name. Not nullptr, which
+        // would make it a folder picker that names the clicked folder.
+        ImGuiFileDialog::Instance()->OpenDialog(
+            "SaveUntitledProject", "Save Project", "", cfg);
+    };
+    if (ctx.save_project_prompt) {
+        ctx.save_project_prompt = false;
+        open_save_dialog(
+            default_project_root(ctx.user_settings, ctx.default_dir),
+            pm.media_folder.empty()
+                ? std::string("Untitled")
+                : std::filesystem::path(pm.media_folder).filename().string());
+    }
+    // Under the name: the folder Save will make, or in red why it can't (OK
+    // greyed out), checked as the user types or moves.
+    IgfdHooks &hooks = igfd_hooks();
+    hooks.name_label = "Folder Name:";
+    hooks.under_name = [] {
+        auto *dlg = ImGuiFileDialog::Instance();
+        const std::string where = dlg->GetCurrentPath();
+        const std::string name =
+            dlg->GetCurrentFileName(IGFD_ResultMode_KeepInputFile);
+        const std::string why = untitled_save_problem(name, where);
+        if (why.empty())
+            ImGui::TextDisabled("Makes %s",
+                                (std::filesystem::path(where) / name).string().c_str());
+        else
+            ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", why.c_str());
+        return why.empty();
+    };
+    const bool save_done = ImGuiFileDialog::Instance()->Display(
+        "SaveUntitledProject", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440));
+    hooks = IgfdHooks{};
+    if (save_done) {
         if (ImGuiFileDialog::Instance()->IsOk()) {
-            auto selected_files =
-                ImGuiFileDialog::Instance()->GetSelection();
-            pm.media_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
-            pm.project_name =
-                dir_difference(pm.media_folder, media_root_dir);
-            load_videos(selected_files, ctx.ps, pm, ctx.window_was_decoding,
-                        ctx.demuxers, ctx.dc_context, ctx.scene,
-                        ctx.label_buffer_size, ctx.decoder_threads,
-                        ctx.is_view_focused);
-            if (print_metadata_fn) print_metadata_fn();
+            const std::string dir = ImGuiFileDialog::Instance()->GetCurrentPath();
+            const std::string name = ImGuiFileDialog::Instance()->GetCurrentFileName(
+                IGFD_ResultMode_KeepInputFile);
+            ImGuiFileDialog::Instance()->Close();
+            std::string err;
+            if (!untitled_save_problem(name, dir).empty()) {
+                // Enter in the name field gets past the greyed-out OK: stay
+                // in the dialog, where the line already says why.
+                open_save_dialog(dir, name);
+            } else if (save_untitled_project(ctx, name, dir, &err)) {
+                ctx.toasts.pushSuccess("Saved project " + pm.project_name);
+                auto after = std::move(ctx.after_save_action);
+                ctx.after_save_action = nullptr;
+                if (after) after();
+            } else {
+                // The name was fine but the disk refused. Say so mid-screen; nothing waits on it now.
+                ctx.popups.pushError("Could not save the project: " + err);
+                ctx.after_save_action = nullptr;
+            }
+        } else {
+            ImGuiFileDialog::Instance()->Close();
+            ctx.after_save_action = nullptr;   // whatever waited on it is off
+        }
+    }
+
+    // Help > About Red
+    if (win.show_about) {
+        ImGui::OpenPopup("About Red");
+        win.show_about = false;
+        win.about_open = true;
+    }
+    ImGui::SetNextWindowSize(ImVec2(440, 0), ImGuiCond_Appearing);
+    // Passing &about_open gives the title bar a close x.
+    if (ImGui::BeginPopupModal("About Red", &win.about_open,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+#if defined(__APPLE__)
+        const char *platform = "macOS, Apple Silicon";
+#elif defined(_WIN32)
+        const char *platform = "Windows, x64";
+#else
+        const char *platform = "Linux, x64";
+#endif
+        ImGui::TextUnformatted("Red -- multi-camera video labeling");
+        ImGui::Separator();
+        ImGui::Text("Version   %s", RED_VERSION);
+        ImGui::Text("Built     %s %s", __DATE__, __TIME__);
+        ImGui::Text("Platform  %s", platform);
+        ImGui::Text("Decoding  %s", red::decode_backend_name());
+        ImGui::TextDisabled("          %s", red::decode_backend_reason());
+        ImGui::Separator();
+        ImGui::TextLinkOpenURL("github.com/moments-behavior/red",
+                               "https://github.com/moments-behavior/red");
+        ImGui::TextDisabled("Quote the version above when reporting an issue.");
+        ImGui::Spacing();
+        if (ImGui::Button("Copy version info")) {
+            std::string info = std::string("Red ") + RED_VERSION + " (" +
+                               platform + ", built " + __DATE__ + ", " +
+                               red::decode_backend_name() + " decoding)";
+            ImGui::SetClipboardText(info.c_str());
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    // Project > Camera Timestamps: pick a folder, confirm, then reopen the
+    // project with it. The decoders take their camera timings when the videos
+    // load, so the folder only applies on a reload -- and reopening goes
+    // through close_project(), which saves the labels first.
+    if (display_folder_dialog("ChooseProjectTimestamps")) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            win.timestamps_pending = ImGuiFileDialog::Instance()->GetCurrentPath();
+            win.timestamps_confirm = true;
         }
         ImGuiFileDialog::Instance()->Close();
     }
-
-    // ChooseImages (Open Images)
-    if (ImGuiFileDialog::Instance()->Display("ChooseImages", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk()) {
-            auto selected_files =
-                ImGuiFileDialog::Instance()->GetSelection();
-            pm.media_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
-            pm.project_name =
-                dir_difference(pm.media_folder, media_root_dir);
-            load_images(selected_files, ctx.ps, pm, ctx.imgs_names, ctx.scene,
-                        ctx.dc_context, ctx.label_buffer_size,
-                        ctx.decoder_threads, ctx.is_view_focused,
-                        ctx.window_was_decoding);
-            ctx.input_is_imgs = true;
+    if (win.timestamps_confirm) {
+        ImGui::OpenPopup("Camera Timestamps##confirm");
+        win.timestamps_confirm = false;
+    }
+    if (ImGui::BeginPopupModal("Camera Timestamps##confirm", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Use the camera timestamps in:");
+        ImGui::TextDisabled("%s", win.timestamps_pending.c_str());
+        ImGui::Spacing();
+        ImGui::TextUnformatted("The project is reopened to apply it.");
+        ImGui::TextDisabled("Saving writes a new labeled_data folder, as "
+                            "%s+S does; without saving, edits since the "
+                            "last save are lost.", RED_MOD_KEY);
+        ImGui::Spacing();
+        // Both buttons record the folder in the .redproj and have the main
+        // loop reopen the project; they differ only in saving labels first.
+        auto apply = [&](bool save_labels) {
+            pm.timestamps_folder = win.timestamps_pending;
+            const std::string redproj =
+                pm.project_path + "/" + pm.project_name + ".redproj";
+            std::string save_err;
+            if (save_project_manager_json(pm, redproj, &save_err)) {
+                // Settle the labels here, as chosen, so reopening does not ask.
+                std::string err;
+                if (save_labels && !save_labels_now(ctx, &err))
+                    ctx.popups.pushError("Could not save the labels: " + err);
+                else {
+                    if (!save_labels) mark_labels_saved(ctx);   // let go
+                    win.load_project_request = redproj;  // main loop reopens it
+                }
+            } else {
+                ctx.popups.pushError("Could not save the project: " + save_err);
+            }
+            win.timestamps_pending.clear();
+            ImGui::CloseCurrentPopup();
+        };
+        if (ImGui::Button("Save labels and reload")) apply(true);
+        ImGui::SameLine();
+        if (ImGui::Button("Reload without saving")) apply(false);
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            win.timestamps_pending.clear();
+            ImGui::CloseCurrentPopup();
         }
+        ImGui::EndPopup();
+    }
+
+    // ChooseMedia (Open Video) / ChooseImages (Open Images). Whatever is open
+    // closes first, as for Load Project: loading over running decoders
+    // crashed. An Untitled project with labels asks before it goes.
+    auto open_media = [&](bool images) {
+        auto selected_files = ImGuiFileDialog::Instance()->GetSelection();
+        const std::string folder = ImGuiFileDialog::Instance()->GetCurrentPath();
+        run_or_confirm_unsaved(ctx, [&ctx, &win, images, selected_files, folder,
+                                     print_metadata_fn,
+                                     nuke_inference_fn]() mutable {
+            close_project(ctx);
+            win.reset();
+            if (nuke_inference_fn) nuke_inference_fn();
+            ProjectManager &pm = ctx.pm;
+            pm.media_folder = folder;
+            remember_media_dir(ctx, pm.media_folder);
+            pm.project_name = std::filesystem::path(pm.media_folder).filename().string();
+            if (images) {
+                load_images(selected_files, ctx.ps, pm, ctx.imgs_names, ctx.scene,
+                            ctx.dc_context, ctx.label_buffer_size,
+                            ctx.decoder_threads, ctx.is_view_focused,
+                            ctx.window_was_decoding, ImageLayout::Flat, 0.0f,
+                            ctx.user_settings.default_realtime_playback);
+                ctx.input_is_imgs = true;
+            } else {
+                load_videos(selected_files, ctx.ps, pm, ctx.window_was_decoding,
+                            ctx.demuxers, ctx.dc_context, ctx.scene,
+                            ctx.label_buffer_size, ctx.decoder_threads,
+                            ctx.is_view_focused,
+                            ctx.user_settings.default_realtime_playback);
+                if (print_metadata_fn) print_metadata_fn();
+            }
+        });
+    };
+    if (ImGuiFileDialog::Instance()->Display("ChooseMedia", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+        if (ImGuiFileDialog::Instance()->IsOk()) open_media(false);
+        ImGuiFileDialog::Instance()->Close();
+    }
+    if (ImGuiFileDialog::Instance()->Display("ChooseImages", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+        if (ImGuiFileDialog::Instance()->IsOk()) open_media(true);
         ImGuiFileDialog::Instance()->Close();
     }
 
@@ -187,42 +456,9 @@ inline void HandleMainMenuDialogs(
         if (ImGuiFileDialog::Instance()->IsOk()) {
             win.switch_skeleton.skeleton_file =
                 ImGuiFileDialog::Instance()->GetFilePathName();
+            remember_skeleton_dir(ctx, win.switch_skeleton.skeleton_file);
         }
         ImGuiFileDialog::Instance()->Close();
     }
 
-    // LoadAnnotProject (Annotate > Load)
-    if (ImGuiFileDialog::Instance()->Display("LoadAnnotProject", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk()) {
-            const auto sel = ImGuiFileDialog::Instance()->GetSelection();
-            std::filesystem::path cfg_path;
-            if (!sel.empty()) {
-                cfg_path = std::filesystem::path(sel.begin()->second);
-            } else {
-                std::string full =
-                    ImGuiFileDialog::Instance()->GetFilePathName(
-                        IGFD_ResultMode_KeepInputFile);
-                if (!full.empty())
-                    cfg_path = std::filesystem::path(full);
-                else
-                    cfg_path = std::filesystem::path(
-                        ImGuiFileDialog::Instance()->GetCurrentPath());
-            }
-            ProjectManager loaded;
-            std::string err;
-            if (!load_project_manager_json(&loaded, cfg_path, &err)) {
-                popups.pushError(err);
-            } else {
-                close_project(ctx);
-                win.reset();
-                if (nuke_inference_fn) nuke_inference_fn();
-                pm = loaded;
-                if (setup_project(pm, skeleton, skeleton_map, &err)) {
-                    on_project_loaded(ctx, print_metadata_fn, print_summary_fn);
-                } else
-                    popups.pushError(err);
-            }
-        }
-        ImGuiFileDialog::Instance()->Close();
-    }
 }

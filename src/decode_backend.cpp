@@ -12,6 +12,13 @@
 #if defined(RED_HAVE_CUDA)
 #include <cuda.h>
 #include <cuda_runtime_api.h>
+#include <nvcuvid.h>
+#include "FFmpegDemuxer.h"
+#elif defined(__APPLE__)
+extern "C" {
+#include <libavcodec/avcodec.h>
+}
+#include <VideoToolbox/VideoToolbox.h>
 #endif
 
 namespace red {
@@ -143,6 +150,128 @@ int sw_decode_threads_per_camera() {
     // before that on a single 1-2 MP stream.
     int per_cam = (int)hw / g_num_cams.load();
     return std::clamp(per_cam, 1, 4);
+}
+
+} // namespace red
+
+namespace red {
+
+bool hw_can_decode_stream(int av_codec_id, int chroma_format,
+                          int bit_depth_minus8, int width, int height,
+                          int device_index, std::string *why) {
+    if (decode_backend() == DecodeBackend::Software) return true;
+
+#if defined(RED_HAVE_CUDA)
+    const cudaVideoCodec codec = FFmpeg2NvCodecId((AVCodecID)av_codec_id);
+    CUVIDDECODECAPS caps{};
+    caps.eCodecType = codec;
+    caps.eChromaFormat = (cudaVideoChromaFormat)chroma_format;
+    caps.nBitDepthMinus8 = (unsigned)bit_depth_minus8;
+
+    // A context has to be current to ask. load_videos runs on the main thread,
+    // which has none -- the decoder threads make their own -- so the first
+    // version of this bailed out and answered "yes" to every stream, which is
+    // exactly the silence it was written to remove. Retain the device's
+    // primary context for the length of the query instead.
+    CUcontext current = nullptr;
+    CUdevice dev = 0;
+    CUcontext primary = nullptr;
+    bool pushed = false;
+    if (cuCtxGetCurrent(&current) != CUDA_SUCCESS || current == nullptr) {
+        if (cuInit(0) != CUDA_SUCCESS || cuDeviceGet(&dev, device_index) != CUDA_SUCCESS ||
+            cuDevicePrimaryCtxRetain(&primary, dev) != CUDA_SUCCESS ||
+            cuCtxPushCurrent(primary) != CUDA_SUCCESS) {
+            std::cerr << "[decode] could not open a CUDA context to ask NVDEC "
+                         "what it supports; assuming it can decode this\n";
+            return true;
+        }
+        pushed = true;
+    }
+
+    const CUresult qr = cuvidGetDecoderCaps(&caps);
+
+    if (pushed) {
+        CUcontext popped = nullptr;
+        cuCtxPopCurrent(&popped);
+        cuDevicePrimaryCtxRelease(dev);
+    }
+
+    if (qr != CUDA_SUCCESS) {
+        if (why) *why = "could not query NVDEC capabilities";
+        return false;
+    }
+
+    // Always say what the GPU answered. The whole failure mode here was a
+    // decoder that reported nothing and drew nothing.
+    std::cerr << "[decode] NVDEC caps (device " << device_index
+              << "): codec=" << (int)codec
+              << " supported=" << (int)caps.bIsSupported
+              << " max=" << caps.nMaxWidth << "x" << caps.nMaxHeight
+              << " (stream " << width << "x" << height << ")\n";
+
+    if (!caps.bIsSupported) {
+        if (why) *why = "this GPU's NVDEC cannot decode this codec";
+        return false;
+    }
+    if (width > (int)caps.nMaxWidth || height > (int)caps.nMaxHeight) {
+        if (why)
+            *why = "resolution " + std::to_string(width) + "x" +
+                   std::to_string(height) + " exceeds NVDEC's " +
+                   std::to_string(caps.nMaxWidth) + "x" +
+                   std::to_string(caps.nMaxHeight);
+        return false;
+    }
+    return true;
+#elif defined(__APPLE__)
+    (void)chroma_format; (void)bit_depth_minus8; (void)width; (void)height;
+    (void)device_index;
+    // Two different limits, and it is worth saying which one was hit.
+    //
+    // red's VideoToolbox path builds a format description for H.264 and HEVC
+    // and nothing else (vt_async_decoder.mm), so anything else fails at init
+    // and leaves the camera with no decoder. But VideoToolbox itself supports
+    // a wider set on some Macs and a narrower one on others -- this machine
+    // decodes MJPEG, ProRes and AV1 but not MPEG-4 Part 2, MPEG-2 or VP9 --
+    // so "red has not implemented it" and "this Mac cannot do it" are separate
+    // answers, and only the first is worth anyone's time to fix.
+    if (av_codec_id != AV_CODEC_ID_H264 && av_codec_id != AV_CODEC_ID_HEVC) {
+        const AVCodecDescriptor *d =
+            avcodec_descriptor_get((AVCodecID)av_codec_id);
+        const std::string name = (d && d->name) ? d->name : "this codec";
+        CMVideoCodecType vt = 0;
+        switch (av_codec_id) {
+        case AV_CODEC_ID_MPEG4:      vt = kCMVideoCodecType_MPEG4Video; break;
+        case AV_CODEC_ID_MPEG2VIDEO: vt = kCMVideoCodecType_MPEG2Video; break;
+        case AV_CODEC_ID_MJPEG:      vt = kCMVideoCodecType_JPEG; break;
+        case AV_CODEC_ID_PRORES:     vt = kCMVideoCodecType_AppleProRes422; break;
+        case AV_CODEC_ID_VP9:        vt = kCMVideoCodecType_VP9; break;
+        case AV_CODEC_ID_AV1:        vt = kCMVideoCodecType_AV1; break;
+        default: break;
+        }
+        if (why) {
+            if (vt && VTIsHardwareDecodeSupported(vt))
+                *why = "VideoToolbox on this Mac can decode " + name +
+                       ", but red's VideoToolbox path only handles H.264 and "
+                       "HEVC";
+            else
+                *why = "VideoToolbox on this Mac cannot decode " + name;
+        }
+        return false;
+    }
+    return true;
+#else
+    (void)av_codec_id; (void)chroma_format; (void)bit_depth_minus8;
+    (void)width; (void)height; (void)device_index; (void)why;
+    return true;
+#endif
+}
+
+void decode_backend_force_software(const std::string &why) {
+    decode_backend();   // make sure the one-time resolve has run
+    if (g_backend == DecodeBackend::Software) return;
+    g_backend = DecodeBackend::Software;
+    g_reason = why;
+    std::cerr << "[decode] falling back to software: " << why << "\n";
 }
 
 } // namespace red

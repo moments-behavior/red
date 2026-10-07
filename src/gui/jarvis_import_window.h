@@ -22,6 +22,7 @@
 #include "jarvis_import.h"
 #include "prediction_store.h"
 #include "gui/panel.h"
+#include "gui/shortcuts.h"
 #include <ImGuiFileDialog.h>
 #include <misc/cpp/imgui_stdlib.h>
 #include <chrono>
@@ -143,16 +144,18 @@ inline std::string jarvis_import_to_labels(
             fa.kp3d[k].x = p3d.x();
             fa.kp3d[k].y = p3d.y();
             fa.kp3d[k].z = p3d.z();
-            fa.kp3d[k].set_imported(c);
+            fa.kp3d[k].set_predicted(c);
             for (int cam = 0; cam < ncam && cam < (int)cams.size(); ++cam) {
                 double px, py;
                 if (reproject_3d_to_cam(p3d, cams[cam],
                                         (int)scene->image_width[cam],
                                         (int)scene->image_height[cam], px, py)) {
                     auto &kp2d = fa.cameras[cam].keypoints[k];
-                    kp2d.x = px; kp2d.y = py; kp2d.labeled = true;
+                    kp2d.x = px; kp2d.y = py;
+                    kp2d.vis = Keypoint2D::Vis::Unknown;
                     kp2d.confidence = c;
-                    kp2d.source = LabelSource::Predicted;
+                    kp2d.set_predicted();
+                    kp2d.reprojected = true;
                 }
             }
         }
@@ -223,7 +226,8 @@ inline void DrawJarvisImportWindow(JarvisImportState &state, AppContext &ctx) {
         const bool no_file    = state.data3d_path.empty();
         const bool needs_cal  = (state.dest == 1) && pm.camera_params.empty();
         const char *blocked =
-            no_project ? "Open a project first."
+            no_project ? (pm.untitled ? "Save the project first (" RED_MOD_KEY "+S)."
+                                      : "Open a project first.")
             : no_skel  ? "The project has no skeleton loaded."
             : no_file  ? "Choose a data3D.csv to import."
             : needs_cal ? "No calibration loaded — cannot bake 2D labels. "
@@ -252,7 +256,11 @@ inline void DrawJarvisImportWindow(JarvisImportState &state, AppContext &ctx) {
 
                 uint32_t fps_hint = 0, total_hint = 0;
                 if (ctx.dc_context) {
-                    if (ctx.dc_context->video_fps > 0)
+                    // Only a declared rate. For an image sequence video_fps
+                    // is an assumed playback rate, and writing that into the
+                    // store would state it as the recording's.
+                    if (ctx.dc_context->fps_declared &&
+                        ctx.dc_context->video_fps > 0)
                         fps_hint = (uint32_t)std::lround(ctx.dc_context->video_fps);
                     if (ctx.dc_context->total_num_frame > 0)
                         total_hint = (uint32_t)ctx.dc_context->total_num_frame;
@@ -311,7 +319,7 @@ inline void DrawJarvisImportWindow(JarvisImportState &state, AppContext &ctx) {
                 ? "Open Pose Stats to review confidence; use \"Fix this frame\" "
                   "to promote a frame into the Labeling Tool."
                 : "These are normal editable labels — correct them in the "
-                  "Labeling Tool and Ctrl+S to save.");
+                  "Labeling Tool and " RED_MOD_KEY "+S to save.");
         }
         },
         // always_fn: the file dialog must be pumped even when the panel is hidden.

@@ -57,8 +57,7 @@ inline void sync_fix_toggle(AppContext &ctx, bool enable) {
         target = std::clamp<int64_t>(cam0->slot_of_pos(p), 0,
                                      plan.canonical_len - 1);
         dc->sync_canonical_len = plan.canonical_len;
-        dc->total_num_frame = (int)plan.canonical_len;
-        dc->estimated_num_frames = (int)plan.canonical_len - 1;
+        dc->set_frame_count((int)plan.canonical_len);
         // Canonical slots are uniform in trigger time — pace playback by the
         // trigger interval.
         dc->video_fps = 1e9 / (double)plan.delta_ns;
@@ -67,15 +66,24 @@ inline void sync_fix_toggle(AppContext &ctx, bool enable) {
         int64_t slot = std::clamp<int64_t>(cur, 0, plan.canonical_len - 1);
         target = cam0->seek_pos(slot);
         dc->sync_fix_active = false;
-        // Restore native counts/fps from the reference demuxer; decoders
-        // repopulate total_num_frame when they hit EOF (as at initial load).
+        // Restore the native counts the same way the loader derives them: the
+        // longest camera, from the per-camera lengths. This used to read
+        // demuxers[0] and leave total_num_frame at INT_MAX for the decoders to
+        // repopulate at EOF -- both of which are gone. Camera 0 is whichever
+        // file sorted first, and the EOF write is now a refinement of that
+        // camera's own slot rather than of the shared total.
         dc->video_fps = ctx.demuxers[0]->GetFramerate();
-        if (ctx.demuxers[0]->GetNumFrames() == 0)
-            dc->estimated_num_frames =
-                (int)(ctx.demuxers[0]->GetDuration() * dc->video_fps);
-        else
-            dc->estimated_num_frames = (int)ctx.demuxers[0]->GetNumFrames() - 1;
-        dc->total_num_frame = INT_MAX;
+        if (dc->per_cam_count > 0) {
+            dc->set_frame_count(dc->longest_cam_frames());
+        } else {
+            if (ctx.demuxers[0]->GetNumFrames() == 0)
+                dc->last_frame_index =
+                    (int)(ctx.demuxers[0]->GetDuration() * dc->video_fps) - 1;
+            else
+                dc->last_frame_index =
+                    (int)ctx.demuxers[0]->GetNumFrames() - 1;
+            dc->total_num_frame = INT_MAX;
+        }
     }
 
     seek_all_cameras(ctx.scene, (int)target, dc->video_fps, ctx.ps, true);
@@ -177,13 +185,13 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
 
     ImGui::SameLine(0.0f, spacing);
     if (ImGui::Button(ICON_FK_STEP_FORWARD)) {
-        int f = std::min(dc->total_num_frame,
+        int f = std::min(std::max(0, dc->total_num_frame - 1),
                          current_frame_num + dc->seek_interval);
         seek_all_cameras(ctx.scene, f, dc->video_fps, ps, false);
     }
     ImGui::SameLine(0.0f, spacing);
     if (ImGui::Button(ICON_FK_FAST_FORWARD)) {
-        int f = std::min(dc->total_num_frame,
+        int f = std::min(std::max(0, dc->total_num_frame - 1),
                          current_frame_num + 10 * dc->seek_interval);
         seek_all_cameras(ctx.scene, f, dc->video_fps, ps, false);
     }
@@ -208,7 +216,7 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
             // seek_accurate = true forward-decodes from the keyframe to the
             // requested frame (same precise path the Labeling Tool uses),
             // instead of snapping to the previous keyframe like scrubbing.
-            state.edit_buf = std::clamp(state.edit_buf, 0, dc->estimated_num_frames);
+            state.edit_buf = std::clamp(state.edit_buf, 0, dc->last_frame_index);
             seek_all_cameras(ctx.scene, state.edit_buf, dc->video_fps, ps, true);
             state.slider_text_editing = false;
             ps.slider_text_editing = false;
@@ -222,7 +230,16 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
         state.edit_buf = ps.slider_frame_number;
         ImGui::SetNextItemWidth(200.0f);
         bool changed = ImGui::SliderInt(
-            "##timeline", &state.edit_buf, 0, dc->estimated_num_frames);
+            "##timeline", &state.edit_buf, 0, dc->last_frame_index);
+
+        // Grabbing the timeline pauses, as the Pause button does: a seek is
+        // for looking at a frame, and playback would carry straight on past
+        // it. On press rather than on change, so a drag scrubs through paused
+        // frames and a click on the current position still stops.
+        if (ImGui::IsItemActivated() && ps.play_video) {
+            ps.play_video = false;
+            ps.pause_selected = 0;
+        }
 
         if (ImGui::TempInputIsActive(ImGui::GetItemID())) {
             // Cmd+click detected — pause and switch to InputInt next frame
@@ -256,7 +273,7 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
                 const sync_plan::SyncCam *cam0 =
                     plan.cam(ctx.pm.camera_names[0]);
                 const int64_t range =
-                    std::max<int64_t>(1, dc->estimated_num_frames + 1);
+                    std::max<int64_t>(1, dc->last_frame_index + 1);
                 for (const auto &kv : plan.cams) {
                     for (const auto &g : kv.second.gaps) {
                         int64_t pos = fix_on || !cam0 ? g.slot
@@ -284,11 +301,19 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     }
 
     ImGui::SameLine(0, spacing);
-    float current_time_sec = state.edit_buf / dc->video_fps;
-    float total_time_sec = dc->estimated_num_frames / dc->video_fps;
-    std::string current_str = format_time(current_time_sec);
-    std::string total_str = format_time(total_time_sec);
-    ImGui::Text("%s / %s", current_str.c_str(), total_str.c_str());
+    if (ctx.input_is_imgs) {
+        // An image sequence has no timebase -- load_images sets video_fps to 1
+        // so the clock would read 00:00:07 for frame 7, which looks like a
+        // duration and is not one. Count frames instead.
+        ImGui::Text("frame %d / %d", (int)state.edit_buf,
+                    (int)dc->last_frame_index);
+    } else {
+        float current_time_sec = state.edit_buf / dc->video_fps;
+        float total_time_sec = dc->last_frame_index / dc->video_fps;
+        std::string current_str = format_time(current_time_sec);
+        std::string total_str = format_time(total_time_sec);
+        ImGui::Text("%s / %s", current_str.c_str(), total_str.c_str());
+    }
 
     // === Playback rate ===
     ImGui::SameLine(0, spacing * 3);
@@ -303,6 +328,8 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     // mode: no clock, one frame per render tick, nothing skipped.
     struct SpeedChoice { const char *label; float speed; bool clock_paced; };
     static const SpeedChoice kSpeeds[] = {
+        {"4x",             4.0f,        true},
+        {"2x",             2.0f,        true},
         {"1x (real time)", 1.0f,        true},
         {"1/2x",           1.0f / 2.0f,  true},
         {"1/4x",           1.0f / 4.0f,  true},
@@ -327,6 +354,11 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     ImGui::TextColored(label_col, "Playback Speed");
     ImGui::SameLine(0, spacing);
     ImGui::SetNextItemWidth(130.0f);
+    // The speeds are multiples of dc->video_fps. These used to be disabled for
+    // an image sequence, because video_fps was 1 there and "1/16x" meant a
+    // frame every sixteen seconds. The rate is now an assumed 30 that the user
+    // can edit (below), so the multiples mean something and slow playback is
+    // reachable without special-casing anything.
     if (ImGui::BeginCombo("##playbackspeed", kSpeeds[speed_idx].label)) {
         for (int i = 0; i < kNumSpeeds; ++i) {
             if (ImGui::Selectable(kSpeeds[i].label, i == speed_idx)) {
@@ -340,10 +372,103 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "1x and the fractions play to the wall clock, so timing is "
-            "accurate and frames are skipped if decoding lags.\n"
+            "The multiples play to the wall clock, so timing is accurate and "
+            "frames are skipped to keep up -- though every frame is still\n"
+            "decoded, so 2x and 4x need decoding that fast. Play Speed on the "
+            "right turns orange when it falls short.\n"
             "\"Every frame\" shows every decoded frame instead \xE2\x80\x94 nothing is "
             "skipped, but the rate depends on decoding speed.");
+
+    // What "1x" means, when nothing declared it. Shown only for a source with
+    // no frame rate of its own, because for a video it is not a choice.
+    if (!dc->fps_declared) {
+        ImGui::SameLine(0, spacing);
+        ImGui::TextColored(label_col, "at");
+        ImGui::SameLine(0, spacing);
+        ImGui::SetNextItemWidth(90.0f);
+        float assumed = (float)dc->video_fps;
+        if (ImGui::DragFloat("##assumedfps", &assumed, 0.5f, 0.5f, 240.0f,
+                             "%.1f fps")) {
+            dc->video_fps = (double)ImClamp(assumed, 0.5f, 240.0f);
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "These images declare no frame rate, so 1x has to be told what "
+                "it means. The fractions are relative to this \xE2\x80\x94 at 30, "
+                "1/16x plays about 2 frames a second.\n"
+                "Drag or double-click to type a value.");
+    }
+
+    // === Camera lengths ===
+    // Always shown, never hidden: "no warning" and "not checked" look the
+    // same when a readout only appears on trouble, and this one is cheap
+    // enough to state either way. A separate diagnosis from the sync plan
+    // below and deliberately not routed through it -- that one answers "is
+    // frame i the same instant in every view", which needs trigger timestamps
+    // most recordings do not ship. This answers "do the cameras hold the same
+    // number of frames", which every demuxer and every image folder can say,
+    // so it is the one that shows up for a bare folder of mp4s.
+    {
+        const int lo = dc->shortest_cam_frames();
+        const int hi = dc->longest_cam_frames();
+        const bool sync_handling = dc->sync_fix_active.load();
+
+        const ImVec4 green(0.4f, 0.9f, 0.4f, 1.0f);
+        const ImVec4 yellow(0.9f, 0.9f, 0.4f, 1.0f);
+        const ImVec4 red(1.0f, 0.45f, 0.35f, 1.0f);
+
+        const char *text = nullptr;
+        ImVec4 col = green;
+        std::string tip;
+        switch (dc->lengths_status()) {
+            case DecoderContext::Lengths::ZeroFrames:
+                text = "zero frames";
+                col = red;
+                tip = "A camera reports no frames at all -- it failed to "
+                      "open, or its folder is empty.";
+                break;
+            case DecoderContext::Lengths::Uneven:
+                // Sync mode remaps every camera onto one canonical timeline,
+                // so the same condition is no longer anything the user has to
+                // deal with. Saying "problem" next to the control that fixed
+                // it would be telling them about work already done.
+                text = sync_handling ? "uneven (realigned)" : "uneven";
+                col = sync_handling ? green : red;
+                tip = "Cameras hold different numbers of frames: " +
+                      std::to_string(lo) + " to " + std::to_string(hi) + ".";
+                if (sync_handling)
+                    tip += "\nRealign is on, so every camera is mapped onto "
+                           "the canonical timeline.";
+                break;
+            case DecoderContext::Lengths::Uncertain:
+                // The container did not declare a frame count, so it was
+                // derived from duration x framerate and can be a frame out
+                // either way. Playing a camera through to its end replaces
+                // the estimate with the real count.
+                text = "possibly uneven";
+                col = yellow;
+                tip = "A camera does not declare its frame count, so the "
+                      "length was estimated (" + std::to_string(lo) + " to " +
+                      std::to_string(hi) + " frames).\nPlay through to "
+                      "replace the estimate with the true count.";
+                break;
+            case DecoderContext::Lengths::Even:
+                text = "even";
+                col = green;
+                tip = "Every camera holds " + std::to_string(hi) +
+                      " frames.";
+                break;
+        }
+
+        ImGui::SameLine(0, spacing);
+        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+        ImGui::SameLine(0, spacing);
+        ImGui::TextColored(label_col, "Lengths");
+        ImGui::SameLine(0, spacing);
+        ImGui::TextColored(col, "%s", text);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", tip.c_str());
+    }
 
     // === Desync fix (canonical trigger timeline) ===
     // Only shown when a usable sync plan exists for the loaded videos.
@@ -459,7 +584,7 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     if (ImGui::Button("Reset##display")) {
         display.contrast = 1.0f;
         display.brightness = 0;
-        display.pivot_midgray = true;
+        display.pivot_midgray = ctx.user_settings.default_pivot_midgray;
     }
 
 #ifndef __APPLE__
@@ -468,25 +593,98 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
 
     // === Right-aligned status readouts ===
     // Pre-format value strings to compute total width for right-alignment
-    char val_fr[16], val_spd[16], val_rr[16];
-    snprintf(val_fr,  sizeof(val_fr),  "%.0f fps", dc->video_fps);
+    char val_fr[40], val_spd[16], val_rr[16];
+    // "Recorded FR" is the rate the source declares. When it declares none,
+    // video_fps holds the assumed playback rate. Printing that here said
+    // "1 fps" -- red's placeholder reported as a fact about the recording. Say
+    // both instead: that nothing was declared, and what is being assumed in
+    // its place, so the number driving playback is never a mystery.
+    if (dc->fps_declared)
+        snprintf(val_fr, sizeof(val_fr), "%.0f fps", dc->video_fps);
+    else
+        snprintf(val_fr, sizeof(val_fr),
+                 "\xE2\x80\x94 (assuming %.0f fps)", dc->video_fps);
     snprintf(val_spd, sizeof(val_spd), "%.2fx",    ps.inst_speed);
     snprintf(val_rr,  sizeof(val_rr),  "%.0f fps", ImGui::GetIO().Framerate);
-    const char *lbl_fr = "Recorded FR", *lbl_spd = "Play Speed", *lbl_rr = "Render Rate";
+    // Which decoder is running (hardware/software, and why) is in
+    // Help > About Red; it does not change during a session, so it does not
+    // need the transport bar's room.
+    // Right-aligned when there is room. The block used to be placed at
+    // window width minus its own width whatever sat to its left, so on a
+    // narrow window it was drawn over the playback-speed controls. It now
+    // steps down instead: full labels, then short ones, then values alone
+    // (named on hover), then nothing.
+    struct Readout { const char *full, *brief, *value; };
+    const Readout items[] = {
+        {"Recorded FR", "FR", val_fr},
+        {"Play Speed", "Speed", val_spd},
+        {"Render Rate", "Render", val_rr},
+    };
+    const int n_items = (int)(sizeof(items) / sizeof(items[0]));
+    enum Tier { Full, Brief, ValuesOnly, Hidden };
+    auto label_of = [&](const Readout &r, int tier) {
+        return tier == Full ? r.full : tier == Brief ? r.brief : nullptr;
+    };
+    auto width_of = [&](int tier, float g) {
+        float w = 0.0f;
+        for (int i = 0; i < n_items; ++i) {
+            if (i) w += g;
+            if (const char *l = label_of(items[i], tier))
+                w += ImGui::CalcTextSize(l).x + spacing;
+            w += ImGui::CalcTextSize(items[i].value).x;
+        }
+        return w;
+    };
+    // Where the controls to the left end, in window coordinates.
+    const float left_end = ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x;
+    const float right_edge = ImGui::GetWindowWidth() - 12.0f;
+    int tier = Full;
     float gap = spacing * 3;
-    float total_w = ImGui::CalcTextSize(lbl_fr).x + spacing + ImGui::CalcTextSize(val_fr).x + gap
-                  + ImGui::CalcTextSize(lbl_spd).x + spacing + ImGui::CalcTextSize(val_spd).x + gap
-                  + ImGui::CalcTextSize(lbl_rr).x + spacing + ImGui::CalcTextSize(val_rr).x;
-    ImGui::SameLine(ImGui::GetWindowWidth() - total_w - 12.0f);
+    for (; tier != Hidden; ++tier) {
+        gap = tier == Full ? spacing * 3 : spacing * 2;
+        if (left_end + gap + width_of(tier, gap) <= right_edge) break;
+    }
 
-    ImGui::TextColored(label_col, "%s", lbl_fr);
-    ImGui::SameLine(0, spacing); ImGui::TextDisabled("%s", val_fr);
-    ImGui::SameLine(0, gap);
-    ImGui::TextColored(label_col, "%s", lbl_spd);
-    ImGui::SameLine(0, spacing); ImGui::TextDisabled("%s", val_spd);
-    ImGui::SameLine(0, gap);
-    ImGui::TextColored(label_col, "%s", lbl_rr);
-    ImGui::SameLine(0, spacing); ImGui::TextDisabled("%s", val_rr);
+    if (tier != Hidden) {
+        ImGui::SameLine(right_edge - width_of(tier, gap));
+        for (int i = 0; i < n_items; ++i) {
+            if (i) ImGui::SameLine(0, gap);
+            const char *l = label_of(items[i], tier);
+            if (l) {
+                ImGui::TextColored(label_col, "%s", l);
+                ImGui::SameLine(0, spacing);
+            }
+            // Play Speed falling short of the speed asked for: decoding cannot
+            // keep up. Said in colour, and how to help in the tooltip.
+            const bool lagging = i == 1 && ps.play_video &&
+                                 ps.realtime_playback && ps.falling_behind;
+            if (lagging)
+                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "%s",
+                                   items[i].value);
+            else
+                ImGui::TextDisabled("%s", items[i].value);
+            if (!ImGui::IsItemHovered()) continue;
+            if (lagging) {
+                // Video decoders skip collapsed views; the image loader does
+                // not yet, so do not suggest what will not help.
+                ImGui::SetTooltip(
+                    "Asked for %gx, getting %.2fx: decoding can't keep up.\n%s",
+                    ps.set_playback_speed, ps.inst_speed,
+                    ctx.input_is_imgs
+                        ? "Pick a lower speed."
+                        : "Collapse camera views you don't need (hidden views "
+                          "are not decoded),\nor pick a lower speed.");
+                continue;
+            }
+            if (i == 0 && !dc->fps_declared)
+                ImGui::SetTooltip("%sThis source declares no frame rate, so "
+                                  "playback runs at an assumed %.1f fps. Change "
+                                  "it next to Playback Speed.",
+                                  l ? "" : "Recorded FR\n", dc->video_fps);
+            else if (!l || tier == Brief)
+                ImGui::SetTooltip("%s", items[i].full);
+        }
+    }
 
     ImGui::End();
 }

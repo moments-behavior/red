@@ -39,7 +39,7 @@ struct Diagnostics {
     bool success = false;
     std::string error;
     ReprojectionDiagnostics::Diagnostics base;
-    // Aligned with base.triangulated / base.residuals.point_id: the (frame, kp)
+    // Aligned with base.exist / base.residuals.point_id: the (frame, kp)
     // that each virtual point index corresponds to.
     std::vector<PointLabel> point_labels;
     std::vector<PerKeypointStats> per_keypoint;
@@ -105,7 +105,9 @@ inline Diagnostics compute(
     std::vector<Candidate> candidates;
     for (const auto &kv : annotations) {
         u32 frame = kv.first;
-        const FrameAnnotation &fa = kv.second;
+        if (kv.second.empty()) continue;
+        // Diagnostics run on the animal being labelled.
+        const FrameAnnotation &fa = kv.second.front();
         for (int kp = 0; kp < num_nodes; kp++) {
             Candidate c;
             c.frame = frame;
@@ -114,7 +116,7 @@ inline Diagnostics compute(
                 if (m >= (int)fa.cameras.size()) continue;
                 if (kp >= (int)fa.cameras[m].keypoints.size()) continue;
                 const Keypoint2D &k2 = fa.cameras[m].keypoints[kp];
-                if (!k2.labeled) continue;
+                if (!k2.usable()) continue;
                 if (k2.x >= UNLABELED * 0.9 || k2.y >= UNLABELED * 0.9) continue;
                 if (!std::isfinite(k2.x) || !std::isfinite(k2.y)) continue;
                 c.cams_labeled.push_back(m);
@@ -146,7 +148,7 @@ inline Diagnostics compute(
     for (int i = 0; i < N; i++) {
         const Candidate &c = candidates[i];
         d.point_labels[i] = PointLabel{c.frame, c.kp};
-        const FrameAnnotation &fa = annotations.at(c.frame);
+        const FrameAnnotation &fa = annotations.at(c.frame).front();
         for (int m : c.cams_labeled) {
             const Keypoint2D &k2 = fa.cameras[m].keypoints[c.kp];
             // Flip Y: AnnotationMap is bottom-left, math expects top-left.

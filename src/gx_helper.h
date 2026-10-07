@@ -9,6 +9,20 @@
 #include "types.h"
 #include <cstdio>
 #include <filesystem>
+#include <string>
+
+std::string get_home_directory();  // utils.cpp
+
+// Where red's shipped files (fonts/, default_imgui_layout.ini) are: beside the
+// binary's parent in a build tree (./release/red -> ./fonts), or in
+// Contents/Resources when running from red.app -- codesign does not allow
+// data files directly in Contents/.
+inline std::string red_resource_dir(const std::string &exe_dir) {
+    const std::string bundle = exe_dir + "/../Resources";
+    std::error_code ec;
+    if (std::filesystem::exists(bundle + "/fonts", ec)) return bundle;
+    return exe_dir + "/..";
+}
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -145,19 +159,30 @@ inline void gx_imgui_init(gx_context *context) {
     ImGui_ImplOpenGL3_Init(context->glsl_version);
 #endif
 
-    // Use absolute paths so fonts and ini work regardless of cwd
+    // The no-project layout lives with the other per-user files, in
+    // ~/.config/red/ beside user_settings.json -- not next to the binary. A
+    // downloaded red.app runs from a read-only, randomised location (macOS
+    // App Translocation), and an installed one may not be writable either.
     static std::string ini_path;
-    ini_path = context->exe_dir + "/imgui.ini";
+    {
+        namespace fs = std::filesystem;
+        const fs::path dir = fs::path(get_home_directory()) / ".config" / "red";
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+        ini_path = (dir / "imgui.ini").string();
+    }
 
     // Always reset to the shipped default layout on launch so that new projects
     // start with a clean arrangement rather than inheriting stale window positions.
     // Per-project layouts are handled separately by switch_ini_to_project().
+    // Non-throwing: a failed copy just means ImGui starts from its own default.
     {
-        const std::string layout = context->exe_dir + "/../default_imgui_layout.ini";
-        if (std::filesystem::exists(layout)) {
+        const std::string layout =
+            red_resource_dir(context->exe_dir) + "/default_imgui_layout.ini";
+        std::error_code ec;
+        if (std::filesystem::exists(layout, ec))
             std::filesystem::copy_file(layout, ini_path,
-                std::filesystem::copy_options::overwrite_existing);
-        }
+                std::filesystem::copy_options::overwrite_existing, ec);
     }
 
     io.IniFilename = ini_path.c_str();
@@ -165,7 +190,7 @@ inline void gx_imgui_init(gx_context *context) {
     // Fonts sit next to the binary's parent (./release/red -> ./fonts), which
     // is where a build-in-place tree puts them. Resolved relative to the
     // executable, not the cwd, so launching from anywhere works.
-    const std::string font_dir = context->exe_dir + "/../fonts";
+    const std::string font_dir = red_resource_dir(context->exe_dir) + "/fonts";
     if (!std::filesystem::exists(font_dir + "/Roboto-Regular.ttf")) {
         // Warn and carry on: AddFontFromFileTTF will fail loudly enough, and
         // an unreadable font is not worth refusing to start over.

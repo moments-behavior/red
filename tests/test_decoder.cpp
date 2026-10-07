@@ -235,7 +235,7 @@ void run_image_loader_test(const std::string &dir, const char *ext, bool jpeg,
     si.seek_accurate = false;
 
     std::thread loader(image_loader, &dc, std::cref(names), ring, kRing, &si,
-                       true, cam, dir, std::string(ext));
+                       true, cam, dir, std::string(ext), ImageLayout::Flat);
 
     int head = 0;
     for (int expected = 0; expected < kImgCount; expected++) {
@@ -319,8 +319,7 @@ int main(int argc, char **argv) {
     dc.gpu_index = 0;
     dc.seek_interval = (int)demuxer.FindKeyFrameInterval();
     dc.video_fps = demuxer.GetFramerate();
-    dc.total_num_frame = n_frames;
-    dc.estimated_num_frames = n_frames - 1;
+    dc.set_frame_count(n_frames);
     dc.sync_fix_active = false;
     dc.sync_canonical_len = 0;
 

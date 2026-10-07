@@ -29,7 +29,8 @@ inline void gui_plot_prediction_overlay(
     const std::vector<CameraParams> &camera_params,
     RenderScene *scene,
     float conf_threshold = 0.0f,
-    float alpha = 0.9f)
+    float alpha = 0.9f,
+    bool show_names = false)
 {
     if (!pose || skeleton == nullptr || camera_params.empty()) return;
     if (view_idx >= (int)scene->num_cams) return;
@@ -95,5 +96,12 @@ inline void gui_plot_prediction_overlay(
         ImU32 col = IM_COL32((int)((1.f - c) * 255.f), (int)(c * 255.f), 40, a_pt);
         dl->AddCircleFilled(pp, 4.0f, col);
         dl->AddCircle(pp, 4.0f, IM_COL32(15, 15, 15, a_pt), 0, 1.0f);
+        if (show_names && node < (int)skeleton->node_names.size() &&
+            !skeleton->node_names[node].empty()) {
+            const float font_size = ImGui::GetFontSize() * 0.75f;
+            const ImVec2 text_pos(pp.x + 9.0f, pp.y - font_size * 0.5f);
+            dl->AddText(ImGui::GetFont(), font_size, text_pos, col,
+                        skeleton->node_names[node].c_str());
+        }
     }
 }

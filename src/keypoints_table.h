@@ -1,14 +1,23 @@
 #pragma once
 #include "app_context.h"
 #include "keypoint_colors.h"
+#include "gui/gui_keypoints.h"   // instance_color, reprojection_errors_px
 #include "gui/keypoint_clipboard.h"
 #include "gui/shortcuts.h"
 #include <imgui.h>
 #include <algorithm>
 #include <string>
 
-inline void DrawKeypointsWindow(AppContext &ctx) {
+// The per-camera x per-keypoint grid. Drawn inline inside the Labeling Tool
+// rather than in a window of its own: it is the labeling surface for whatever
+// the tool's controls act on, and splitting them across two dockable windows
+// meant the animal selector, Triangulate and the table it reports on could sit
+// on opposite sides of the screen. `height` is what the caller can spare.
+inline void DrawKeypointsTable(AppContext &ctx, float height) {
     int current_frame_num = ctx.current_frame_num;
+    // The table shows the animal being edited, not the first one -- otherwise
+    // dragging animal 2's keypoint clears animal 2's 3D while the table keeps
+    // reporting animal 0's, which reads as the state failing to follow.
     auto &pm = ctx.pm;
     auto *scene = ctx.scene;
     auto &skeleton = ctx.skeleton;
@@ -17,7 +26,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
     const ImVec4 active_kp_color = active_keypoint_color(ctx.user_settings);
     KeypointClipboard &kc = keypoint_clipboard();
 
-    if (ImGui::Begin("Keypoints")) {
+    {
 
         bool keypoints_find =
             annotations.find(current_frame_num) != annotations.end();
@@ -25,6 +34,84 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
         if (skeleton.num_nodes > 0 && skeleton.has_skeleton) {
             const int rows_count = scene->num_cams;
             const int columns_count = skeleton.num_nodes + 1;
+            // A 2D project with several cameras: separate videos, labelled one
+            // at a time, so the table is the focused camera's (else the
+            // first) and what it does by keypoint name stays on that camera.
+            // -1 = every camera (calibrated projects).
+            int only_cam = -1;
+            if (project_is_2d(ctx.pm) && rows_count > 1) {
+                only_cam = 0;
+                for (int c = 0; c < rows_count && c < (int)is_view_focused.size(); ++c)
+                    if (is_view_focused[c]) { only_cam = c; break; }
+            }
+
+            // Cells take the views' colouring (right-click a view > Keypoint
+            // Colours): each keypoint's own colour, the instance's, or the
+            // reprojection error -- per camera in its row, and in the 3D row
+            // the mean over the cameras.
+            using KC = DisplayState::KeypointColoring;
+            std::vector<std::vector<ImVec4>> row_cols((size_t)rows_count);
+            std::vector<ImVec4> cols3d;
+            // Reprojection errors (px, NaN = none) per camera row, for the
+            // colours and the hovers; computed whenever there is a calibration.
+            std::vector<std::vector<double>> row_errs((size_t)rows_count);
+            if (keypoints_find && !ctx.pm.camera_params.empty()) {
+                const auto &fa = instance_or_first(annotations.at(current_frame_num),
+                                                   ctx.active_instance);
+                for (int r = 0; r < rows_count && r < (int)ctx.pm.camera_params.size(); ++r)
+                    row_errs[(size_t)r] = reprojection_errors_px(
+                        fa, r, skeleton.num_nodes, ctx.pm.camera_params[(size_t)r],
+                        (double)scene->image_height[r]);
+            }
+            // Mean over the cameras it has an error in; NaN for none.
+            auto mean_err = [&](int node, int *count = nullptr) {
+                double sum = 0;
+                int n = 0;
+                for (const auto &re : row_errs)
+                    if (node < (int)re.size() && std::isfinite(re[(size_t)node])) {
+                        sum += re[(size_t)node];
+                        ++n;
+                    }
+                if (count) *count = n;
+                return n ? sum / n : std::nan("");
+            };
+            if (keypoints_find && ctx.display.keypoint_coloring != KC::ByNode) {
+                const auto &fa = instance_or_first(annotations.at(current_frame_num),
+                                                   ctx.active_instance);
+                const int nn = skeleton.num_nodes;
+                if (ctx.display.keypoint_coloring == KC::ByInstance) {
+                    const ImVec4 c = instance_color(ctx.pm.annotation_config.label_info,
+                                                    fa.instance_id, ctx.active_instance);
+                    for (auto &rc : row_cols) rc.assign((size_t)nn, c);
+                    cols3d.assign((size_t)nn, c);
+                } else if (!ctx.pm.camera_params.empty()) {
+                    for (int r = 0; r < rows_count; ++r)
+                        for (double e : row_errs[(size_t)r])
+                            row_cols[(size_t)r].push_back(reprojection_error_color(e));
+                    for (int k = 0; k < nn; ++k)
+                        cols3d.push_back(reprojection_error_color(mean_err(k)));
+                }
+            }
+            // " · reprojection 3.4 px" for a cell, or "" with none.
+            auto err_text = [&](int row, int node) -> std::string {
+                if (row < 0 || row >= (int)row_errs.size() ||
+                    node >= (int)row_errs[(size_t)row].size() ||
+                    !std::isfinite(row_errs[(size_t)row][(size_t)node]))
+                    return "";
+                char b[48];
+                snprintf(b, sizeof(b), "\nreprojection %.1f px",
+                         row_errs[(size_t)row][(size_t)node]);
+                return b;
+            };
+            // A cell's colour: row < 0 is the 3D row.
+            auto node_col = [&](int row, int node) -> ImVec4 {
+                const std::vector<ImVec4> *v =
+                    row < 0 ? &cols3d
+                            : (row < (int)row_cols.size() ? &row_cols[(size_t)row] : nullptr);
+                if (v && node < (int)v->size()) return (*v)[(size_t)node];
+                return node < (int)skeleton.node_colors.size()
+                           ? skeleton.node_colors[(size_t)node] : ImVec4(1, 1, 1, 1);
+            };
 
             // Keep the multi-selection sized to the current skeleton.
             kc.ensure_size(skeleton.num_nodes);
@@ -44,7 +131,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                 ImGuiTableFlags_Resizable |
                 ImGuiTableFlags_HighlightHoveredColumn;
 
-            float table_height = ImGui::GetContentRegionAvail().y;
+            float table_height = height;
             ImVec2 table_size(0.0f, table_height);
 
             // Top of the table on screen = top of the angled-header band; used
@@ -55,7 +142,14 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
             // the table): a specific cell, a column header, or neither.
             int hover_row = -1, hover_node = -1, hover_header_node = -1;
 
-            if (ImGui::BeginTable("table_angled_headers", columns_count,
+            // The table ID carries the skeleton name. ImGui saves column
+            // settings -- widths, visibility, display order -- per table ID in
+            // the ini, so a fixed ID makes a 24-keypoint skeleton inherit the
+            // layout of a 25-keypoint one opened earlier: same columns, wrong
+            // arrangement, and no way to tell from the data.
+            const std::string table_id =
+                "table_angled_headers##" + skeleton.name;
+            if (ImGui::BeginTable(table_id.c_str(), columns_count,
                                   table_flags, table_size)) {
                 ImGui::TableSetupColumn(
                     "Name", ImGuiTableColumnFlags_NoHide |
@@ -72,7 +166,10 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                 // call TableHeadersRow(): its horizontal cells duplicated the
                 // angled labels. Clicking a keypoint's angled header is handled
                 // after the body rows, gated to the header Y-band.
-                ImGui::TableSetupScrollFreeze(1, 1);
+                // 1 column + 2 rows: the angled header and the 3D row
+                // submitted right below it, so a sixteen-camera rig cannot
+                // scroll the solve out of sight.
+                ImGui::TableSetupScrollFreeze(1, 2);
 
                 // Angled header row, but with per-column TEXT color so a
                 // selected keypoint's slanted NAME itself changes color. This
@@ -145,6 +242,31 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                     }
                 }
 
+                // Focusing a view should bring its row into sight -- the
+                // table is short by design and most rows are scrolled out.
+                // That is what the reordering below used to do, by drawing the
+                // focused row first; the cost was that rows are labelled by
+                // camera and moved under you every time you switched views.
+                //
+                // Scrolling to it gets the same row in the same place while
+                // the order stays put, so the rows around it are its actual
+                // neighbours. Only when the focus CHANGES: doing it every
+                // frame would fight you the moment you scrolled to look at
+                // anything else.
+                static int last_focused_row = -1;
+                const bool focus_changed = (focused_row != last_focused_row);
+                last_focused_row = focused_row;
+
+                // ...except when the focus change came from a click in this
+                // table. Then the row was already in front of you -- you just
+                // clicked it -- and scrolling would move it out from under the
+                // cursor. SetWindowFocus lands next frame, so the flag set by
+                // a click is read on the frame the change shows up, and
+                // cleared there.
+                static bool focus_from_table = false;
+                const bool suppress_scroll = focus_from_table;
+                if (focus_changed) focus_from_table = false;
+
                 auto render_row = [&](int row) {
                     ImGui::PushID(row);
                     ImGui::TableNextRow();
@@ -154,18 +276,57 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                         is_view_focused[row] && keypoints_find;
 
                     ImGui::TableSetColumnIndex(0);
-                    // Highlight only the camera-name cell, not the whole row:
-                    // tinting every column fights with the per-cell keypoint
-                    // state colors drawn below.
-                    if (row_focused)
-                        ImGui::TableSetBgColor(
-                            ImGuiTableBgTarget_CellBg,
-                            ImGui::GetColorU32(ImVec4(0.7f, 0.3f, 0.3f, 0.65f)));
                     if (first_body_top < 0.0f)
                         first_body_top = ImGui::GetCursorScreenPos().y;
+
+                    // Bring this row to the top, unconditionally. The point
+                    // of the reordering this replaces was that the row you are
+                    // working on is AT THE TOP of a deliberately short table,
+                    // so putting it there every time is the behaviour, not an
+                    // overreaction to it.
+                    //
+                    // An "only if off-screen" test was worse than useless
+                    // here: TableSetupScrollFreeze pins two header rows above
+                    // the scroll area, so a row hidden BEHIND the header still
+                    // has y > GetScrollY() and read as visible -- exactly the
+                    // case where scrolling was wanted. Measuring the viewport
+                    // from inside a cell is unreliable for the same sort of
+                    // reason.
+                    //
+                    // Still only on a CHANGE of focus, which is what keeps it
+                    // from fighting you when you scroll to look elsewhere.
+                    if (row == focused_row && focus_changed &&
+                        !suppress_scroll)
+                        ImGui::SetScrollHereY(0.0f);
                     ImGui::AlignTextToFramePadding();
-                    ImGui::Text("%s", row < (int)pm.camera_names.size()
-                        ? pm.camera_names[row].c_str() : "?");
+                    // Clicking the name brings that camera's view to the
+                    // front. Only SetWindowFocus is needed: red.cpp notices
+                    // the focus change next frame and moves the highlight
+                    // here, so the two cannot disagree about which view is
+                    // current.
+                    if (row < (int)pm.camera_names.size()) {
+                        const std::string &cam_name = pm.camera_names[row];
+                        ImGui::PushID(row);
+                        // The Selectable IS the focus highlight, restyled to
+                        // the red the cell tint used, so there is one thing
+                        // drawing this state rather than two.
+                        ImGui::PushStyleColor(ImGuiCol_Header,
+                                              ImVec4(0.7f, 0.3f, 0.3f, 0.65f));
+                        const bool clicked =
+                            ImGui::Selectable(cam_name.c_str(), row_focused,
+                                              ImGuiSelectableFlags_None);
+                        ImGui::PopStyleColor();
+                        if (clicked) {
+                            ImGui::SetWindowFocus(cam_name.c_str());
+                            focus_from_table = true;
+                        }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Bring %s to the front",
+                                              cam_name.c_str());
+                        ImGui::PopID();
+                    } else {
+                        ImGui::Text("?");
+                    }
 
                     for (int column = 1; column < columns_count; column++) {
                         if (ImGui::TableSetColumnIndex(column)) {
@@ -177,14 +338,60 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                             ImVec2 p0 = ImGui::GetCursorScreenPos();
 
                             if (keypoints_find) {
-                                auto &fa = annotations.at(current_frame_num);
+                                auto &fa = instance_or_first(annotations.at(current_frame_num), ctx.active_instance);
                                 const bool is_active =
                                     row < (int)fa.cameras.size() &&
                                     fa.cameras[row].active_id == (u32)node;
                                 const bool labeled =
                                     row < (int)fa.cameras.size() &&
                                     node < (int)fa.cameras[row].keypoints.size() &&
-                                    fa.cameras[row].keypoints[node].labeled;
+                                    fa.cameras[row].keypoints[node].usable();
+                                const bool occluded =
+                                    row < (int)fa.cameras.size() &&
+                                    node < (int)fa.cameras[row].keypoints.size() &&
+                                    fa.cameras[row].keypoints[node].is_occluded();
+                                const bool user_annotated =
+                                    labeled && fa.cameras[row].keypoints[node].is_manual();
+                                const bool projected =
+                                    labeled && !fa.cameras[row].keypoints[node].is_manual();
+                                // Coordinate origin, independent of the above:
+                                // a point you placed and then refreshed with T
+                                // is both manual and reprojected.
+                                const bool reproj =
+                                    labeled &&
+                                    fa.cameras[row].keypoints[node].reprojected;
+                                const bool model_made =
+                                    labeled &&
+                                    fa.cameras[row].keypoints[node].is_predicted();
+
+                                const bool observed =
+                                    labeled &&
+                                    fa.cameras[row].keypoints[node].is_observed();
+
+                                // All THREE axes, spelled out. The tooltip is
+                                // the one place the full state is legible, so
+                                // it reports the combination rather than
+                                // picking whichever part a marker can show.
+                                // Visibility used to be missing from it
+                                // entirely: a reprojection someone had
+                                // confirmed and one nobody had looked at both
+                                // read "reprojected from 3D".
+                                const char *state_text =
+                                    occluded     ? "occluded / outside frame"
+                                    : !labeled   ? "not placed"
+                                    : user_annotated
+                                        ? (reproj ? "user annotated, reprojected"
+                                                  : "user annotated")
+                                    : model_made
+                                        ? (reproj ? "model predicted, reprojected"
+                                                  : "model predicted")
+                                    : reproj     ? "reprojected from 3D"
+                                                 : "placed";
+                                const char *vis_text =
+                                    occluded   ? nullptr   // the state IS the visibility
+                                    : !labeled ? nullptr
+                                    : observed ? "confirmed visible here"
+                                               : "visibility not judged";
                                 ImVec4 node_color = ImVec4(0, 0, 0, 0);
 
                                 // Fill shows placement status regardless of
@@ -193,27 +400,42 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                                 // keypoint is drawn as an outline below, so
                                 // whether it has been placed stays visible.
                                 if (labeled) {
-                                    node_color =
-                                        skeleton.node_colors[node];
-                                    node_color.w = 0.9f;
+                                    node_color = node_col(row, node);
+                                    node_color.w = projected ? 0.5f : 0.9f;
+                                } else if (occluded) {
+                                    node_color = ImVec4(0.85f, 0.25f, 0.25f, 0.9f);
                                 } else if (kc.is_selected(node)) {
                                     // Selected but empty: tint so the selection
                                     // is visible in the body too.
                                     node_color = sel_fill;
                                 }
 
-                                const bool triangulated =
-                                    node < (int)fa.kp3d.size() &&
-                                    fa.kp3d[node].triangulated;
-
-                                // The whole cell is a click target: clicking
-                                // sets this keypoint active for this camera view.
+                                // The whole cell is a click target, and it
+                                // does both halves of "work on this one":
+                                // makes the keypoint active in that camera,
+                                // and brings that camera's view to the front.
+                                //
+                                // Picking a cell is already a statement about
+                                // which view you mean -- the row IS a camera.
+                                // Leaving the view behind meant reading the
+                                // table to find the cell worth fixing and then
+                                // hunting for the tab it belonged to.
+                                //
+                                // SetWindowFocus alone, as with the camera
+                                // names above: red.cpp sees the focus change
+                                // next frame and moves the highlight, so the
+                                // two cannot disagree about the current view.
                                 ImGui::PushID(column);
                                 if (ImGui::InvisibleButton(
                                         "##kpcell",
                                         ImVec2(cell_w, ImGui::GetFrameHeight()))) {
                                     if (row < (int)fa.cameras.size())
                                         fa.cameras[row].active_id = (u32)node;
+                                    if (row < (int)pm.camera_names.size()) {
+                                        ImGui::SetWindowFocus(
+                                            pm.camera_names[row].c_str());
+                                        focus_from_table = true;
+                                    }
                                 }
                                 // Active keypoint: outline the cell (in the
                                 // user's "Active Keypoint" color) rather than
@@ -236,26 +458,71 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                                     hover_node = node;
                                     if (node < (int)skeleton.node_names.size() &&
                                         row < (int)pm.camera_names.size()) {
+                                        const std::string et = err_text(row, node);
                                         if (kc.count() >= 2)
                                             ImGui::SetTooltip(
-                                                "%s / %s\n"
-                                                "Click: set active   Delete: remove selected set (%d)",
+                                                "%s / %s\n%s%s%s%s\n"
+                                                "Click: set active + show view   "
+                                                "Delete: remove selected set (%d)",
                                                 pm.camera_names[row].c_str(),
                                                 skeleton.node_names[node].c_str(),
+                                                state_text,
+                                                vis_text ? "\n" : "",
+                                                vis_text ? vis_text : "",
+                                                et.c_str(),
                                                 kc.count());
                                         else
                                             ImGui::SetTooltip(
-                                                "%s / %s\n"
-                                                "Click: set active   Delete: remove from this camera",
+                                                "%s / %s\n%s%s%s%s\n"
+                                                "Click: set active + show view   "
+                                                "Delete: remove from this camera",
                                                 pm.camera_names[row].c_str(),
-                                                skeleton.node_names[node].c_str());
+                                                skeleton.node_names[node].c_str(),
+                                                state_text,
+                                                vis_text ? "\n" : "",
+                                                vis_text ? vis_text : "",
+                                                et.c_str());
                                     }
                                 }
-                                // Triangulated marker, drawn over the cell.
-                                if (triangulated)
+                                // T marks coordinates that came from the 3D,
+                                // which a hand-placed point acquires the
+                                // moment you press T -- so it shows on those
+                                // too. Alpha carries the other axis: solid
+                                // where nobody placed the point, faint where
+                                // the position is yours and was merely
+                                // refreshed.
+                                if (reproj)
                                     ImGui::GetWindowDrawList()->AddText(
                                         ImVec2(p0.x + 2.0f, p0.y),
-                                        IM_COL32(255, 255, 255, 255), "T");
+                                        user_annotated
+                                            ? IM_COL32(255, 255, 255, 130)
+                                            : IM_COL32(255, 255, 255, 255),
+                                        "T");
+                                if (occluded)
+                                    ImGui::GetWindowDrawList()->AddText(
+                                        ImVec2(p0.x + 2.0f, p0.y),
+                                        IM_COL32(255, 120, 120, 255), "X");
+
+                                // A confirmed-visible point that you did NOT
+                                // place: a reprojection someone looked at and
+                                // vouched for, or an imported one a model
+                                // vouched for. Marked because it is the state
+                                // you cannot otherwise tell from a
+                                // reprojection nobody has judged.
+                                //
+                                // Not marked on your own points: placing one
+                                // already means you saw it, so a tick on every
+                                // cell you filled in would say nothing and
+                                // clutter the common case. Bottom-right, clear
+                                // of the T and X at the top-left.
+                                if (observed && !user_annotated) {
+                                    const ImVec2 tsz = ImGui::CalcTextSize("v");
+                                    ImGui::GetWindowDrawList()->AddText(
+                                        ImVec2(p0.x + cell_w - tsz.x - 2.0f,
+                                               p0.y + ImGui::GetFrameHeight() -
+                                                   tsz.y),
+                                        IM_COL32(210, 255, 210, 220), "v");
+                                }
                                 ImGui::PopID();
 
                                 ImU32 cell_bg_color =
@@ -270,17 +537,110 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                     ImGui::PopID();
                 };
 
-                // Render focused row first
-                if (focused_row != -1) {
-                    render_row(focused_row);
+                // === 3D row ===
+                // The solve, per keypoint, pinned under the header and above
+                // the 2D rows it came from. Its state used to be reachable
+                // only by hovering each point in a camera view one at a time,
+                // and the Triangulated/Predicted split was not visible at all
+                // -- which matters most on a tailcycle session, where every
+                // node arrives Predicted and you need to see which ones you
+                // have actually re-solved.
+                // Shown whenever the project HAS a 3D layer, not only once a
+                // frame does. The 2D rows below already work this way -- they
+                // draw and leave their cells empty -- and the row going
+                // missing until the first B made the table look like it had
+                // no 3D row at all, on exactly the frames where you are
+                // deciding whether to start one.
+                if (!project_is_2d(ctx.pm) && scene->num_cams > 1) {
+                    const FrameAnnotation *fa3d =
+                        keypoints_find
+                            ? &instance_or_first(
+                                  annotations.at(current_frame_num),
+                                  ctx.active_instance)
+                            : nullptr;
+                    ImGui::PushID("row3d");
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    // First body row now, so it marks where the angled-header
+                    // band ends -- otherwise clicks here would be taken for
+                    // header clicks and would select keypoint columns.
+                    if (first_body_top < 0.0f)
+                        first_body_top = ImGui::GetCursorScreenPos().y;
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("3D");
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip(
+                            "Triangulated position per keypoint, for the instance "
+                            "being edited.\nStrong = solved here, faint = "
+                            "predicted by a model.");
+
+                    for (int column = 1; column < columns_count; column++) {
+                        if (!ImGui::TableSetColumnIndex(column)) continue;
+                        const int node = column - 1;
+                        // No frame yet: the cell is drawn, just empty, so the
+                        // row keeps its shape and its column alignment.
+                        static const Keypoint3D kNo3D{};
+                        const Keypoint3D &k3 =
+                            (fa3d && node < (int)fa3d->kp3d.size())
+                                ? fa3d->kp3d[node]
+                                : kNo3D;
+
+                        float cell_w = ImGui::GetContentRegionAvail().x;
+                        if (cell_w < 1.0f) cell_w = 1.0f;
+                        ImGui::PushID(column);
+                        ImGui::InvisibleButton(
+                            "##kp3dcell",
+                            ImVec2(cell_w, ImGui::GetFrameHeight()));
+                        if (k3.exist && ImGui::IsItemHovered()) {
+                            // Its mean reprojection error over the cameras
+                            // (what the cell's colour shows, by error); each
+                            // camera's is in its own row.
+                            std::string errs;
+                            int n_err = 0;
+                            const double m = mean_err(node, &n_err);
+                            if (n_err > 0) {
+                                char b[80];
+                                snprintf(b, sizeof(b), "\nreprojection: mean %.1f px (%d camera%s)",
+                                         m, n_err, n_err == 1 ? "" : "s");
+                                errs = b;
+                            }
+                            ImGui::SetTooltip(
+                                "%s\n%s\n(%.2f, %.2f, %.2f)%s",
+                                node < (int)skeleton.node_names.size()
+                                    ? skeleton.node_names[node].c_str() : "",
+                                k3.is_predicted()
+                                    ? "predicted" : "triangulated",
+                                k3.x, k3.y, k3.z, errs.c_str());
+                        }
+                        ImGui::PopID();
+
+                        // Coloured the way the 2D cells above are: the node's
+                        // own colour, with alpha carrying how the position was
+                        // arrived at. There it is placed 0.9 against
+                        // reprojected 0.5; the 3D counterpart is solved here
+                        // against predicted by a model. One reading for the
+                        // whole column -- the hue says which keypoint, the
+                        // strength says how much of it is yours.
+                        if (k3.exist && node < (int)skeleton.node_colors.size()) {
+                            ImVec4 c = node_col(-1, node);
+                            c.w = k3.is_predicted() ? 0.5f : 0.9f;
+                            ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg,
+                                                   ImGui::GetColorU32(c));
+                        }
+                    }
+                    ImGui::PopID();
                 }
 
-                // Render remaining rows
-                for (int row = 0; row < rows_count; row++) {
-                    if (row == focused_row)
-                        continue;
-                    render_row(row);
-                }
+                // Camera order, always.
+                // A 2D project's cameras are separate videos, labelled one at
+                // a time: only the camera in focus (else the first) has a
+                // row. Calibrated projects show every camera, as the views of
+                // one moment.
+                if (only_cam >= 0)
+                    render_row(only_cam);
+                else
+                    for (int row = 0; row < rows_count; row++)
+                        render_row(row);
 
                 // Angled-header interaction: the header band is the strip
                 // between band_top and the first body row. TableGetHoveredColumn
@@ -302,14 +662,14 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                         if (kc.count() >= 2)
                             ImGui::SetTooltip(
                                 "%s\n"
-                                "Click: select   Shift/Ctrl: multi-select   "
+                                "Click: select   Shift/" RED_MOD_KEY ": multi-select   "
                                 "Delete: remove selected set (%d)",
                                 skeleton.node_names[hc - 1].c_str(),
                                 kc.count());
                         else
                             ImGui::SetTooltip(
                                 "%s\n"
-                                "Click: select   Shift/Ctrl: multi-select   "
+                                "Click: select   Shift/" RED_MOD_KEY ": multi-select   "
                                 "Delete: remove from all cameras",
                                 skeleton.node_names[hc - 1].c_str());
                     }
@@ -339,9 +699,10 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                                 kc.anchor = node;
                                 if (keypoints_find) {
                                     auto &fa =
-                                        annotations.at(current_frame_num);
-                                    for (auto &cam : fa.cameras)
-                                        cam.active_id = (u32)node;
+                                        instance_or_first(annotations.at(current_frame_num), ctx.active_instance);
+                                    for (int c = 0; c < (int)fa.cameras.size(); ++c)
+                                        if (only_cam < 0 || c == only_cam)
+                                            fa.cameras[(size_t)c].active_id = (u32)node;
                                 }
                             }
                         }
@@ -352,7 +713,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
             }
 
             // ── Select All (Ctrl+A): toggle every keypoint column. Scoped to
-            //    the Keypoints window so it never clashes with the image-view
+            //    the keypoints table so it never clashes with the image-view
             //    'A' (previous active keypoint), which only fires over a plot. ──
             if ((ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) ||
                  ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) &&
@@ -369,16 +730,25 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
             //    selection over the window) ──
             if (keypoints_find &&
                 keys::pressed(keys::Sc::DeleteKeypoint)) {
-                auto &fa = annotations.at(current_frame_num);
+                auto &fa = instance_or_first(annotations.at(current_frame_num), ctx.active_instance);
                 const bool win_hovered = ImGui::IsWindowHovered(
                     ImGuiHoveredFlags_RootAndChildWindows);
                 auto delete_selection = [&]() {
-                    int n = delete_selected_all_cameras(
-                        kc, fa, skeleton.num_nodes, scene->num_cams);
+                    int n = 0;
+                    if (only_cam >= 0) {
+                        for (int node = 0; node < skeleton.num_nodes; ++node)
+                            if (kc.is_selected(node)) {
+                                delete_node_from_camera(fa, node, only_cam);
+                                ++n;
+                            }
+                    } else {
+                        n = delete_selected_all_cameras(kc, fa, skeleton.num_nodes,
+                                                        scene->num_cams);
+                    }
                     if (n)
                         ctx.toasts.pushSuccess(
-                            "Deleted " + std::to_string(n) +
-                            " keypoint(s) from all cameras");
+                            "Deleted " + std::to_string(n) + " keypoint(s) from " +
+                            (only_cam >= 0 ? "this camera" : "all cameras"));
                 };
                 if (win_hovered && kc.count() >= 2) {
                     // A built-up multi-selection takes priority over whatever is
@@ -389,8 +759,11 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                 } else if (hover_row >= 0 && hover_node >= 0) {
                     delete_node_from_camera(fa, hover_node, hover_row);
                 } else if (hover_header_node >= 0) {
-                    delete_node_all_cameras(fa, hover_header_node,
-                                            scene->num_cams);
+                    if (only_cam >= 0)
+                        delete_node_from_camera(fa, hover_header_node, only_cam);
+                    else
+                        delete_node_all_cameras(fa, hover_header_node,
+                                                scene->num_cams);
                 } else if (win_hovered && kc.any()) {
                     delete_selection();
                 }
@@ -408,7 +781,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                 } else {
                     int sel = kc.count();
                     int n = copy_selected_keypoints(
-                        kc, annotations.at(current_frame_num),
+                        kc, instance_or_first(annotations.at(current_frame_num), ctx.active_instance),
                         skeleton.num_nodes, scene->num_cams, skeleton.name);
                     if (n == 0)
                         ctx.toasts.push(
@@ -429,7 +802,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
             if (keys::pressed(keys::Sc::PasteKeypoints)) {
                 if (!kc.has_clip()) {
                     ctx.toasts.push(
-                        "Clipboard is empty (copy with Ctrl+C first)",
+                        "Clipboard is empty (copy with " RED_MOD_KEY "+C first)",
                         Toast::Warning, 4.0f);
                 } else if (!paste_identity_ok(kc, skeleton.num_nodes,
                                               scene->num_cams, skeleton.name)) {
@@ -438,9 +811,12 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                         "cannot paste",
                         Toast::Warning, 5.0f);
                 } else {
-                    FrameAnnotation &fa = get_or_create_frame(
-                        annotations, (u32)current_frame_num,
-                        skeleton.num_nodes, scene->num_cams);
+                    // Onto the instance being edited, on a frame started with
+                    // the nearest labelled frame's instances.
+                    FrameAnnotation &fa = instance_or_first(
+                        create_frame_instances(annotations, (u32)current_frame_num,
+                                               skeleton.num_nodes, scene->num_cams),
+                        ctx.active_instance);
                     int n = paste_keypoints(kc, fa, skeleton.num_nodes,
                                             scene->num_cams);
                     ctx.toasts.pushSuccess(
@@ -449,5 +825,4 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
             }
         }
     }
-    ImGui::End();
 }

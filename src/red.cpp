@@ -1,5 +1,6 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui.h"
+#include "fatal_handler.h"
 #include "imgui_internal.h"
 #include "mac_modifier_fix.h"
 #include "IconsForkAwesome.h"
@@ -24,7 +25,6 @@
 #include "gui/switch_skeleton_window.h"
 #include "gui/annotation_dialog.h"
 #include "gui/labeling_tool_window.h"
-#include "gui/project_window.h"
 #include "gui/settings_window.h"
 #include "gui/main_menu_dialogs.h"
 #include "gui/main_menu_bar.h"
@@ -75,6 +75,9 @@
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
+// tracktail forward tracker (after stb_image_write: the HTTP client PNG-encodes
+// crops with it). Owns the httplib include; see tracktail_actions.h.
+#include "tracktail_actions.h"
 #ifndef __APPLE__
 #include "kernel.cuh"  // CUDA display kernels; empty without RED_HAVE_CUDA
 #endif
@@ -222,6 +225,13 @@ static void print_project_summary(const ProjectManager &pm,
 }
 
 int main(int argc, char **argv) {
+    // Write stdout as it comes. Redirected to a file or pipe it is otherwise
+    // block-buffered, and a crash then loses exactly the lines before it --
+    // a Windows log captured with `red.exe | Tee-Object` ended at startup
+    // although red had crashed loading a video. Its volume is low enough
+    // that unbuffered costs nothing that matters.
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    install_fatal_handler();
     // Print build timestamp so the user can verify they're running the latest
     // rebuild (debugging stale-binary issues during integration work).
     printf("red built %s %s\n", __DATE__, __TIME__);
@@ -271,15 +281,29 @@ int main(int argc, char **argv) {
 #endif
 
     render_initialize_target(window);
+#if !defined(__APPLE__) && !defined(_WIN32)
+    // Linux: a window's title-bar / taskbar icon is whatever the program sets
+    // at run time (macOS takes the app's .icns, Windows the exe's resource).
+    {
+        const std::string icon = red_resource_dir(window->exe_dir) + "/icon.png";
+        int w = 0, h = 0, n = 0;
+        if (unsigned char *px = stbi_load(icon.c_str(), &w, &h, &n, 4)) {
+            GLFWimage img{w, h, px};
+            glfwSetWindowIcon(window->render_target, 1, &img);
+            stbi_image_free(px);
+        }
+    }
+#endif
     RenderScene *scene = (RenderScene *)malloc(sizeof(RenderScene));
     // scene is malloc'd uninitialized; explicitly set the bool fields we
     // read before buffer allocation so behavior is deterministic. Default
     // CPU Buffer — see UserSettings::use_cpu_buffer for rationale.
     scene->use_cpu_buffer = true;
     scene->gpu_upload = false; // set for real in render_allocate_scene_memory
-    std::string red_data_dir;
+    scene->force_host_upload = false;
+    std::string default_dir;
     std::string media_root_dir;
-    prepare_application_folders(red_data_dir, media_root_dir);
+    prepare_application_folders(default_dir, media_root_dir);
     UserSettings user_settings = load_user_settings();
     // Honor the persisted buffer mode (default GPU Buffer on first launch).
     // Frame buffers are allocated later in media_loader::render_allocate_scene_memory
@@ -288,7 +312,11 @@ int main(int argc, char **argv) {
     // Seed the keypoint colormap global from persisted settings before any
     // project loads (setup_project reads it to color node_colors).
     g_keypoint_colormap = user_settings.keypoint_colormap;
-    std::string skeleton_dir = red_data_dir + "/skeleton";
+    // Where skeleton .json dialogs start: the folder of the last one picked
+    // or saved (remembered in user settings), else the default folder.
+    std::string skeleton_dir = user_settings.last_skeleton_dir.empty()
+                                   ? default_dir
+                                   : user_settings.last_skeleton_dir;
     std::vector<std::thread> decoder_threads;
     std::vector<FFmpegDemuxer *> demuxers;
 
@@ -301,6 +329,7 @@ int main(int argc, char **argv) {
     WindowStates win;
     bool save_requested = false;
     int current_frame_num = 0;
+    int active_instance = 0;
     std::vector<std::string> imgs_names;
 
     // for labeling
@@ -310,6 +339,10 @@ int main(int argc, char **argv) {
 
     // Annotation model
     AnnotationMap annotations;
+
+    // tracktail forward tracker: HTTP client state. Lives for the whole
+    // process (the server URL survives project switches).
+    TracktailRuntime tracktail_rt;
 
     // Predictions live in a separate, memory-mapped store rather than in
     // `annotations`, so importing a whole video never floods the Labeling Tool.
@@ -341,14 +374,27 @@ int main(int argc, char **argv) {
     win.export_win.jpeg_quality = user_settings.jarvis_jpeg_quality;
 
 
-    win.annotation.video_folder = user_settings.default_media_root_path.empty()
-                                     ? media_root_dir
-                                     : user_settings.default_media_root_path;
+    // The New Project form's Media Folder starts empty (or with the media
+    // already open); its Browse starts where media dialogs do.
 
     colors[ImPlotCol_Crosshairs] = ImVec4(0.3f, 0.10f, 0.64f, 1.00f);
 
     int label_buffer_size = user_settings.default_buffer_size;
     std::vector<bool> is_view_focused;
+    // Which view the cursor was last inside. Focus follows the cursor, but
+    // only when the cursor MOVES to a different view -- otherwise Tab's choice
+    // would be overwritten on the very next frame, since the cursor has not
+    // gone anywhere. -1 = no view entered yet.
+    int last_hovered_view = -1;
+    // Which camera window ImGui last made focused. Tracked separately from the
+    // hover so each can trigger on CHANGE: a persistent "this window is
+    // focused" would otherwise fight the cursor every frame in a split layout.
+    int last_focused_view = -1;
+    // Which dock node each camera window sits in, refreshed every frame. Views
+    // tabbed together share one; a view split off has its own. Tab cycles
+    // within a node, because a view in another node is already on screen --
+    // cycling to it would just steal focus from what you are looking at.
+    std::vector<ImGuiID> view_dock_id;
     bool input_is_imgs = false;
     PopupStack popups;
     ToastQueue toasts;
@@ -358,21 +404,21 @@ int main(int argc, char **argv) {
     std::unordered_map<std::string, bool> window_was_decoding;
     std::unordered_map<std::string, bool> window_is_visible;  // actual ImGui visibility (prev frame)
     PlaybackState ps;
-    ps.set_playback_speed = user_settings.default_playback_speed;
-    ps.realtime_playback = user_settings.default_realtime_playback;
+    // Every session starts at 1x real time; the transport bar sets the speed
+    // (an older Settings default for it is no longer applied).
+    user_settings.default_playback_speed = 1.0f;
+    user_settings.default_realtime_playback = true;
+    ps.set_playback_speed = 1.0f;
+    ps.realtime_playback = true;
     DisplayState display;
-    display.brightness = user_settings.default_brightness;
-    display.contrast = user_settings.default_contrast;
+    // Brightness / contrast start neutral (DisplayState's defaults) and are
+    // set in the transport bar; how contrast pivots is a saved preference.
     display.pivot_midgray = user_settings.default_pivot_midgray;
+    reproj_thresholds() = {user_settings.reproj_good_px, user_settings.reproj_bad_px};
 
     // variables for project management
     ProjectManager pm = ProjectManager();
-    pm.project_root_path = user_settings.default_project_root_path.empty()
-                               ? red_data_dir
-                               : user_settings.default_project_root_path;
-    pm.media_folder = user_settings.default_media_root_path.empty()
-                          ? media_root_dir
-                          : user_settings.default_media_root_path;
+    pm.project_root_path = default_project_root(user_settings, default_dir);
 
     bool main_loop_running = false;
 
@@ -397,15 +443,30 @@ int main(int argc, char **argv) {
         skeleton, skeleton_map,
         annotations,
         popups, toasts, deferred, preframe,
-        user_settings, red_data_dir, skeleton_dir,
+        user_settings, default_dir, skeleton_dir,
         imgs_names, demuxers, decoder_threads,
         is_view_focused, window_was_decoding,
-        input_is_imgs, label_buffer_size, current_frame_num,
+        input_is_imgs, label_buffer_size, current_frame_num, active_instance,
         display, window, save_requested, project_ini_path, main_loop_running
 #ifdef __APPLE__
         , mac_last_uploaded_frame
 #endif
     };
+
+    // Quitting with an Untitled project's labels only in memory asks first
+    // (run_or_confirm_unsaved), as replacing the project does. The window's
+    // close request -- its close button, and Cmd+Q on macOS, which GLFW
+    // routes here -- is cancelled until the user has chosen; Save or Don't
+    // Save then closes. A plain function pointer, so the context is static.
+    static AppContext *quit_guard_ctx = nullptr;
+    quit_guard_ctx = &ctx;
+    glfwSetWindowCloseCallback(window->render_target, [](GLFWwindow *w) {
+        if (!quit_guard_ctx || !labels_unsaved(*quit_guard_ctx)) return;
+        glfwSetWindowShouldClose(w, GLFW_FALSE);
+        run_or_confirm_unsaved(*quit_guard_ctx, [w]() {
+            glfwSetWindowShouldClose(w, GLFW_TRUE);
+        });
+    });
 
     // Callbacks for static console-output functions in this file
     auto print_metadata = [&]() {
@@ -439,14 +500,13 @@ int main(int argc, char **argv) {
         [&](ProjectManager &pm_ref, std::string &err) -> bool {
         // Validate new project BEFORE closing old project — if setup fails
         // we want to keep the old project intact and show the error.
+        // A new project is Untitled: no folder or .redproj until the first
+        // save (save_untitled_project) names it and says where.
         ProjectManager new_pm = pm_ref;
-        if (!ensure_dir_exists(new_pm.project_path, &err))
-            return false;
+        new_pm.untitled = true;
+        new_pm.project_name.clear();
+        new_pm.project_path.clear();
         if (!setup_project(new_pm, skeleton, skeleton_map, &err))
-            return false;
-        std::filesystem::path redproj_path =
-            std::filesystem::path(new_pm.project_path) / (new_pm.project_name + ".redproj");
-        if (!save_project_manager_json(new_pm, redproj_path, &err))
             return false;
 
         // Validation passed — now safe to close old project
@@ -469,20 +529,17 @@ int main(int argc, char **argv) {
 
     // Panel registry — replaces manual draw calls
     PanelRegistry panels;
-    panels.add({"Create Project",
-                [&]() { DrawProjectWindow(ctx); }, nullptr});
     panels.add({"Annotation Dialog",
                 [&]() { DrawAnnotationDialog(win.annotation, ctx, annot_create_cb); },
                 nullptr});
-    panels.add({"Keypoints",
-                [&]() { DrawKeypointsWindow(ctx); },
-                [&]() { return pm.plot_keypoints_flag; }});
     panels.add({"Labeling Tool",
                 [&]() {
                     DrawLabelingToolWindow(win.labeling, ctx);
                     if (keypoints_find && keys::pressed(keys::Sc::Triangulate)) {
                         if (!pm.camera_params.empty()) {
-                            reprojection(annotations.at(current_frame_num),
+                            reprojection(instance_or_first(
+                                             annotations.at(current_frame_num),
+                                             active_instance),
                                          &skeleton, pm.camera_params, scene);
                         } else {
                             toasts.push("No calibration loaded",
@@ -493,7 +550,7 @@ int main(int argc, char **argv) {
                 [&]() { return pm.plot_keypoints_flag; }});
     panels.add({"Help", [&]() {
                     help::Context hctx;
-                    hctx.project_open = !pm.project_path.empty();
+                    hctx.project_open = !pm.project_path.empty() || pm.untitled;
                     hctx.is_3d        = hctx.project_open && !project_is_2d(pm);
                     hctx.bbox_on      = win.bbox.enabled;
                     hctx.obb_on       = win.obb.enabled;
@@ -506,10 +563,16 @@ int main(int argc, char **argv) {
     panels.add({"Import JARVIS Predictions",
                 [&]() { DrawJarvisImportWindow(win.jarvis_import, ctx); },
                 nullptr});
+    panels.add({"tailcycle Dataset",
+                [&]() { DrawTailcycleDatasetWindow(win.tailcycle_open, ctx); },
+                nullptr});   // always called: it pumps the folder dialog
+    panels.add({"Skeleton Creator",
+                [&]() { DrawSkeletonCreatorWindow(win.skeleton_creator, ctx); },
+                nullptr});
     panels.add({"Settings",
                 [&]() { DrawSettingsWindow(win.settings, ctx); },
                 nullptr});
-    panels.add({"Export Tool",
+    panels.add({"Export",
                 [&]() { DrawExportWindow(win.export_win, ctx, annotations); },
                 nullptr});
     panels.add({"Group JARVIS Export",
@@ -544,21 +607,9 @@ int main(int argc, char **argv) {
     panels.add({"Switch Skeleton",
                 [&]() { DrawSwitchSkeletonWindow(win.switch_skeleton, ctx); },
                 nullptr});
-
-    // Helper: find the first visible camera index (for frame-buffer display).
-    auto find_visible_cam = [&]() -> int {
-        if (ps.pause_seeked) return 0;
-        for (int i = 0; i < scene->num_cams; i++)
-            if (window_was_decoding[pm.camera_names[i]]) return i;
-        return 0;
-    };
-
-    // Helper: seek by a signed multiplier of the seek interval.
-    auto seek_relative = [&](int multiplier) {
-        int target = std::clamp(current_frame_num + multiplier * dc_context->seek_interval,
-                                0, dc_context->total_num_frame);
-        seek_all_cameras(scene, target, dc_context->video_fps, ps, false);
-    };
+    panels.add({"tracktail",
+                [&]() { DrawTracktailWindow(win.tracktail, ctx); },
+                nullptr});
 
     main_loop_running = true;
     while (!glfwWindowShouldClose(window->render_target)) {
@@ -681,20 +732,36 @@ int main(int argc, char **argv) {
                 cam_signature += pm.camera_names[j] + "|";
             static std::string docked_signature;
             if (cam_signature != docked_signature) {
-                docked_signature = cam_signature;
-                bool has_saved_layout = false;
-                for (int j = 0; j < ncam && !has_saved_layout; ++j) {
+                // A camera counts as already placed only if it is placed
+                // SOMEWHERE. Settings with DockId == 0 mean it was saved
+                // floating, which is the state this pass exists to correct
+                // rather than a layout worth preserving -- and treating those
+                // as "has a layout" made the problem permanent: one session
+                // that ended with floating cameras wrote floating entries, and
+                // every session after it skipped the pass and floated again.
+                bool has_docked_layout = false;
+                for (int j = 0; j < ncam && !has_docked_layout; ++j) {
                     ImGuiID wid = ImHashStr(pm.camera_names[j].c_str());
-                    has_saved_layout =
-                        ImGui::FindWindowSettingsByID(wid) != nullptr;
+                    if (ImGuiWindowSettings *ws =
+                            ImGui::FindWindowSettingsByID(wid))
+                        has_docked_layout = ws->DockId != 0;
                 }
                 const ImGuiID central = 0x00000005;
-                if (!has_saved_layout && ImGui::DockBuilderGetNode(central)) {
+                if (has_docked_layout) {
+                    docked_signature = cam_signature;  // nothing to do
+                } else if (ImGui::DockBuilderGetNode(central)) {
                     for (int j = 0; j < ncam; ++j)
                         ImGui::DockBuilderDockWindow(
                             pm.camera_names[j].c_str(), central);
                     ImGui::DockBuilderFinish(0x00000001);
+                    docked_signature = cam_signature;  // handled
                 }
+                // Otherwise the central node does not exist yet -- the .ini
+                // reload happens in a preframe callback and its nodes are not
+                // live until the dockspace is next built. The signature is
+                // deliberately NOT committed here, so this retries next frame.
+                // Committing it up front was the bug: one early frame with no
+                // node meant the cameras were never docked at all.
             }
         }
 
@@ -737,6 +804,11 @@ int main(int argc, char **argv) {
             ctx.toasts.push("Prediction store closed (skeleton changed)");
         }
 
+        // tracktail: Probe / Forward requests from the panel.
+        // Runs synchronously on the main thread (one chunk is ~1-3 s on the
+        // server, so the UI stalls for that long -- same as the T key).
+        tracktail_handle_requests(win.tracktail, tracktail_rt, ctx);
+
         // Pose Stats "Fix this frame": promote one predicted frame into the
         // editable Labeling Tool. Reprojects the stored 3D to each camera as
         // Predicted-source keypoints, keeps the 3D, and flags the frame
@@ -757,7 +829,7 @@ int main(int argc, char **argv) {
                     float z = pose[k * 4 + 2], c = pose[k * 4 + 3];
                     if (std::isnan(x) || std::isnan(y) || std::isnan(z)) continue;
                     fa.kp3d[k].x = x; fa.kp3d[k].y = y; fa.kp3d[k].z = z;
-                    fa.kp3d[k].set_imported(c);  // predicted, awaiting review
+                    fa.kp3d[k].set_predicted(c);  // predicted, awaiting review
                     placed_3d++;
                     Eigen::Vector3d p3d(x, y, z);
                     for (int cam = 0; cam < scene->num_cams &&
@@ -768,9 +840,11 @@ int main(int argc, char **argv) {
                                                 (int)scene->image_height[cam],
                                                 px, py)) {
                             auto &kp2d = fa.cameras[cam].keypoints[k];
-                            kp2d.x = px; kp2d.y = py; kp2d.labeled = true;
+                            kp2d.x = px; kp2d.y = py;
+                            kp2d.vis = Keypoint2D::Vis::Unknown;
                             kp2d.confidence = c;
-                            kp2d.source = LabelSource::Predicted;
+                            kp2d.set_predicted();
+                            kp2d.reprojected = true;
                         }
                     }
                 }
@@ -808,6 +882,21 @@ int main(int argc, char **argv) {
 
 
         // Handle main menu file dialogs
+        // Text size (View > Text Size): works anywhere, Welcome screen too.
+        if (keys::pressed(keys::Sc::TextLarger))
+            set_ui_text_scale(ctx, user_settings.ui_text_scale + kUiTextScaleStep);
+        if (keys::pressed(keys::Sc::TextSmaller))
+            set_ui_text_scale(ctx, user_settings.ui_text_scale - kUiTextScaleStep);
+        if (keys::pressed(keys::Sc::TextReset))
+            set_ui_text_scale(ctx, 1.0f);
+
+        // A skeleton picker's "New..." asked for the Skeleton Creator.
+        if (ctx.open_skeleton_creator) {
+            ctx.open_skeleton_creator = false;
+            win.skeleton_creator.show = true;
+            ImGui::SetWindowFocus("Skeleton Creator");
+        }
+
         HandleMainMenuDialogs(ctx, win, media_root_dir,
                               print_metadata, print_summary,
                               [&]() {});
@@ -824,12 +913,29 @@ int main(int argc, char **argv) {
         }
 
         static int select_corr_head = 0;
+        // Playing: an arrow seek recorded while paused is moot.
+        if (ps.play_video) ps.pending_seek = -1;
+
         if (ps.video_loaded && (!ps.play_video)) {
-            int visible_idx = find_visible_cam();
 
             // Frame buffer keyboard navigation — global so it works
             // even when the "Frames in the buffer" tab is hidden.
             bool selection_changed = false;
+
+            // An arrow seek recorded last frame, which was drawn with the
+            // Frame Buffer outlined in red: run it now. While it blocks, that
+            // red frame is what is on screen. If it is slow, the arrow presses
+            // made meanwhile arrive on the next frame, which drops them.
+            if (ps.pending_seek >= 0) {
+                const int target = ps.pending_seek;
+                ps.pending_seek = -1;
+                const auto t0 = std::chrono::steady_clock::now();
+                seek_all_cameras(scene, target, dc_context->video_fps, ps,
+                                 ps.pending_seek_accurate);
+                if (std::chrono::steady_clock::now() - t0 >
+                    std::chrono::milliseconds(100))
+                    ps.drop_arrows_on_frame = ImGui::GetFrameCount() + 1;
+            }
 
             // Clamp just in case
             if (ps.pause_selected < 0)
@@ -837,25 +943,92 @@ int main(int argc, char **argv) {
             if (ps.pause_selected >= (int)scene->size_of_buffer)
                 ps.pause_selected = scene->size_of_buffer - 1;
 
-            if (keys::pressed(keys::Sc::BufferPrev)) {
-                if (ps.pause_selected > 0) {
-                    ps.pause_selected--;
-                    selection_changed = true;
-                }
-            }
+            // The last frame there is, when known. The arrow keys below may
+            // not select past it: the ring has size_of_buffer slots whatever
+            // the timeline's length, and near the end the extra ones hold
+            // nothing.
+            const int last_frame =
+                dc_context->total_num_frame > 0 &&
+                        dc_context->total_num_frame < INT_MAX
+                    ? dc_context->total_num_frame - 1
+                    : INT_MAX;
 
-            if (keys::pressed(keys::Sc::BufferNext)) {
-                if (ps.pause_selected < (int)scene->size_of_buffer - 1) {
-                    ps.pause_selected++;
-                    selection_changed = true;
+            // Left / Right: one frame. Up / Down: a jump -- one keyframe
+            // interval on video, landing on the keyframe, the cheapest place
+            // to seek to; ten frames on images, which have no keyframes and
+            // seek anywhere as cheaply. Paused only. Inside the decoded buffer
+            // a move is a selection change; past either end it is a seek, so
+            // stepping carries on beyond what is decoded.
+            const int jump_frames =
+                ctx.input_is_imgs ? 10 : std::max(1, dc_context->seek_interval);
+            int step = 0;
+            bool only_jumps = true;   // every press was Up/Down
+            auto take = [&](keys::Sc sc, ImGuiKey k, bool is_jump) {
+                if (!keys::pressed(sc)) return;
+                step += keys::arrow_delta(k, jump_frames);
+                only_jumps = only_jumps && is_jump;
+            };
+            take(keys::Sc::SeekBack, ImGuiKey_LeftArrow, false);
+            take(keys::Sc::SeekFwd, ImGuiKey_RightArrow, false);
+            take(keys::Sc::JumpBack, ImGuiKey_UpArrow, true);
+            take(keys::Sc::JumpFwd, ImGuiKey_DownArrow, true);
+            // A slow seek held this thread, and the presses made during it
+            // have just arrived together. ImGui hands them out one per frame,
+            // so each would run another blocking seek; drop them all instead
+            // -- this frame's and those still queued -- so what happens
+            // matches what could be seen happening.
+            if (ps.drop_arrows_on_frame == ImGui::GetFrameCount()) {
+                ps.drop_arrows_on_frame = -1;
+                keys::drain_queued_arrows(jump_frames, nullptr);
+                step = 0;
+            }
+            if (step != 0) {
+                const int cur = ps.to_display_frame_number + ps.pause_selected;
+                const int target = std::clamp(cur + step, 0, last_frame);
+                const int offset = target - ps.to_display_frame_number;
+                if (target != cur) {
+                    if (offset >= 0 && offset < (int)scene->size_of_buffer) {
+                        ps.pause_selected = offset;
+                        selection_changed = true;
+                    } else {
+                        // Run next frame (above), once this one -- outlined
+                        // red -- is on screen. A video jump lands on the
+                        // keyframe (fast); anything with a single step must
+                        // land on the frame itself (exact).
+                        ps.pending_seek = target;
+                        ps.pending_seek_accurate =
+                            !(only_jumps && !ctx.input_is_imgs);
+                    }
                 }
             }
 
             select_corr_head =
                 (ps.pause_selected + ps.read_head) % scene->size_of_buffer;
-            current_frame_num =
-                scene->display_buffer[visible_idx][select_corr_head]
-                    .frame_number;
+            // The slot at read_head holds to_display_frame_number, and
+            // pause_selected is a fixed offset from it, so the position is
+            // arithmetic rather than something to look up. seek_all_cameras
+            // sets all three together, so this holds after a seek as well.
+            //
+            // It used to be read out of the ring, which only works while the
+            // cameras are still filling it. With one view open and that
+            // camera ended, the slot still held whatever was there several
+            // wraps earlier: the position was reported as 189 while the
+            // timeline was at 317. current_frame_num is the annotation key --
+            // get_or_create_frame() is called with it -- so that filed labels
+            // under a frame a hundred back from the one on screen.
+            current_frame_num = ps.to_display_frame_number + ps.pause_selected;
+            if (dc_context->total_num_frame > 0 &&
+                current_frame_num > dc_context->total_num_frame - 1)
+                current_frame_num = dc_context->total_num_frame - 1;
+        }
+
+        // A frame change starts with the first instance selected.
+        {
+            static int last_frame = -1;
+            if (current_frame_num != last_frame) {
+                last_frame = current_frame_num;
+                active_instance = 0;
+            }
         }
 
         DrawFrameBufferWindow(ctx, select_corr_head);
@@ -875,6 +1048,22 @@ int main(int argc, char **argv) {
                                          ImGuiCond_FirstUseEver);
                 bool is_visible = ImGui::Begin(win_name.c_str());
                 window_is_visible[win_name] = is_visible;
+                if ((int)view_dock_id.size() < scene->num_cams)
+                    view_dock_id.resize(scene->num_cams, 0);
+                view_dock_id[j] = ImGui::GetWindowDockID();
+
+                // Selecting this camera's tab focuses its window but leaves
+                // the cursor on the tab bar, outside every plot -- so the
+                // hover rule below never fires and the Keypoints table went on
+                // floating the previous camera's row until the mouse was moved
+                // into the view. Focus follows either signal now.
+                if (is_visible && ImGui::IsWindowFocused() &&
+                    last_focused_view != j) {
+                    last_focused_view = j;
+                    last_hovered_view = j;
+                    for (int v = 0; v < (int)is_view_focused.size(); ++v)
+                        is_view_focused[v] = (v == j);
+                }
 
                 if (!window_was_decoding[win_name] && is_visible &&
                     ps.play_video) {
@@ -1125,16 +1314,65 @@ int main(int argc, char **argv) {
                                           annotations.end());
                     }
 
+                    // A box edge or label under the pointer shows the system
+                    // resize / move cursor, which the crosshairs would hide.
+                    const ImPlotFlags view_flags =
+                        ImPlotFlags_Equal | ImPlotFlags_NoMenus |
+                        (bbox_shows_resize_cursor(win.bbox, (int)j)
+                             ? ImPlotFlags_None : ImPlotFlags_Crosshairs);
                     if (ImPlot::BeginPlot("##no_plot_name", avail_size,
-                                          ImPlotFlags_Equal |
-                                              ImPlotFlags_Crosshairs |
-                                              ImPlotFlags_NoMenus)) {
+                                          view_flags)) {
+                        // Shift+drag draws a bbox; the image holds still.
+                        // Set every frame: ImPlot keeps an axis's flags until
+                        // they are set again, so a lock set only while drawing
+                        // stayed on and stopped zoom and pan for good.
+                        const ImPlotAxisFlags lock =
+                            bbox_blocks_pan(win.bbox) ? ImPlotAxisFlags_Lock
+                                                      : ImPlotAxisFlags_None;
+                        ImPlot::SetupAxes(nullptr, nullptr, lock, lock);
                         ImPlot::SetupAxisLimits(
                             ImAxis_X1, 0, scene->image_width[j],
                             ImPlotCond_Once);
                         ImPlot::SetupAxisLimits(
                             ImAxis_Y1, 0, scene->image_height[j],
                             ImPlotCond_Once);
+                        // Past this camera's own last frame there is nothing
+                        // to show. The texture still holds its final decoded
+                        // frame, so drawing it would present a stale image as
+                        // though it were this instant -- the one thing a view
+                        // being annotated must not do.
+                        // Two quantities, both of which have to be right,
+                        // and neither of which can be read off the buffers.
+                        //
+                        // A camera that has run out does NOT stop publishing:
+                        // it keeps advancing frame_number past its own end
+                        // while holding its last real image. A 240-frame
+                        // camera was observed reporting slot 244 and latest
+                        // 251. So "is this view behind the others" can never
+                        // expose it -- the view claims to be current.
+                        //
+                        // Nor can the position come from the slots. Only a
+                        // VISIBLE camera decodes, so with one view up the
+                        // maximum is taken over that camera alone, and its
+                        // ring still holds numbers from the initial fill:
+                        // head 12 read back as frame 12 while the timeline
+                        // was at 252.
+                        //
+                        // current_frame_num is the position in both modes,
+                        // and per_cam_frames is the length the container
+                        // declared. Those two, nothing else.
+                        const int cam_frames_j =
+                            dc_context->per_cam_contiguous
+                                ? dc_context->cam_frames((int)j)
+                                : 0;
+                        const bool cam_ended =
+                            cam_frames_j > 0 &&
+                            current_frame_num >= cam_frames_j;
+                        if (cam_ended) {
+                            DrawCameraEndedBadge(
+                                (float)scene->image_width[j],
+                                (float)scene->image_height[j]);
+                        } else {
                         ImPlot::PlotImage(
                             "##no_image_name",
 #ifdef __APPLE__
@@ -1145,6 +1383,7 @@ int main(int argc, char **argv) {
                             ImVec2(0, 0),
                             ImVec2(scene->image_width[j],
                                    scene->image_height[j]));
+                        }
 
                         // Desync fix: the displayed slot is a duplicate
                         // standing in for a frame this camera dropped.
@@ -1161,42 +1400,104 @@ int main(int argc, char **argv) {
                         if (pm.plot_keypoints_flag) {
                             // labeling (keypoints)
                             // OBB tool uses G key (not W), so no keypoint conflict
-                            if (ImPlot::IsPlotHovered()) {
+                            //
+                            // NOT ImPlot::IsPlotHovered(): keypoints are
+                            // ImPlot::DragPoint items, and hovering one makes
+                            // IsPlotHovered() false. Every shortcut below was
+                            // therefore dead exactly while the cursor was on a
+                            // keypoint -- so M could not mark the point you
+                            // were looking at, and A/D/Q/E could not step off
+                            // it. The plot rectangle is what "this view is
+                            // under the cursor" actually means here, so ask
+                            // that directly and let the drag tools keep their
+                            // own hover for dragging.
+                            const ImVec2 plot_pos = ImPlot::GetPlotPos();
+                            const ImVec2 plot_size = ImPlot::GetPlotSize();
+                            const bool view_under_cursor =
+                                ImGui::IsWindowHovered(
+                                    ImGuiHoveredFlags_ChildWindows |
+                                    ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                                ImGui::IsMouseHoveringRect(
+                                    plot_pos,
+                                    ImVec2(plot_pos.x + plot_size.x,
+                                           plot_pos.y + plot_size.y));
+                            if (view_under_cursor) {
                                 // Focus is sticky: the last view the cursor
-                                // entered stays focused until another view is
-                                // entered. It must NOT clear on hover-exit --
-                                // keypoints are ImPlot::DragPoint items, and
-                                // hovering one makes IsPlotHovered() false, so
-                                // clearing here would un-float this camera's row
-                                // in the Keypoints table exactly while the user
-                                // is working on a keypoint in it.
-                                for (int v = 0; v < (int)is_view_focused.size(); ++v)
-                                    is_view_focused[v] = (v == j);
+                                // ENTERED stays focused until it enters
+                                // another. Rewriting this every frame made Tab
+                                // useless with split views -- it set the next
+                                // view, and this put it straight back to
+                                // whichever one the motionless cursor happened
+                                // to be over.
+                                if (last_hovered_view != j) {
+                                    last_hovered_view = j;
+                                    for (int v = 0;
+                                         v < (int)is_view_focused.size(); ++v)
+                                        is_view_focused[v] = (v == j);
+                                }
                                 if (keys::pressed(keys::Sc::CreateFrame)) {
                                     // create frame annotation
-                                    if (!keypoints_find) {
-                                        get_or_create_frame(annotations,
+                                    // Every instance in the project: a new frame
+                                    // gets them all, any other the ones it lacks.
+                                    {
+                                        create_frame_instances(annotations,
                                             current_frame_num,
                                             skeleton.num_nodes,
                                             scene->num_cams);
                                     }
                                 }
 
+                                // The selected instance may be one the frame
+                                // does not hold yet (the Instances row lists
+                                // the project's roster): add those first, so
+                                // labelling lands on it, not on #0.
+                                if (keypoints_find &&
+                                    active_instance >=
+                                        (int)annotations.at(current_frame_num).size())
+                                    create_frame_instances(annotations, current_frame_num,
+                                                           skeleton.num_nodes,
+                                                           scene->num_cams);
                                 if (keypoints_find && skeleton.has_skeleton) {
-                                    u32 *kp = &annotations.at(current_frame_num)
+                                    u32 *kp = &instance_or_first(
+                                                   annotations.at(current_frame_num),
+                                                   active_instance)
                                                    .cameras[j].active_id;
                                     if (keys::pressed(keys::Sc::PlaceKeypoint)) {
                                         // labeling sequentially each view
                                         ImPlotPoint mouse =
                                             ImPlot::GetPlotMousePos();
-                                        auto &fa = annotations.at(current_frame_num);
+                                        auto &fa = instance_or_first(
+                                            annotations.at(current_frame_num),
+                                            active_instance);
                                         auto &kp2d = fa.cameras[j].keypoints[*kp];
                                         kp2d.x = mouse.x;
                                         kp2d.y = mouse.y;
-                                        kp2d.labeled = true;
+                                        kp2d.vis = Keypoint2D::Vis::Unknown;
+                                        kp2d.set_manual();
+                                        kp2d.reprojected = false;
+                                        // Moving a 2D point invalidates the 3D
+                                        // solved from it. Dragging already did
+                                        // this (gui_keypoints); placing did
+                                        // not, so the old point kept its "T"
+                                        // and its coordinates.
+                                        fa.kp3d[*kp].clear();
                                         if (*kp < (skeleton.num_nodes - 1)) {
                                             (*kp)++;
                                         }
+                                    }
+
+                                    // X / Z: next / previous instance.
+                                    const int inst_step =
+                                        keys::pressed(keys::Sc::NextInstance) ? 1
+                                        : keys::pressed(keys::Sc::PrevInstance) ? -1
+                                                                                : 0;
+                                    if (inst_step) {
+                                        auto &fis =
+                                            annotations.at(current_frame_num);
+                                        const int n = (int)fis.size();
+                                        if (n > 0)
+                                            active_instance =
+                                                ((active_instance + inst_step) % n + n) % n;
                                     }
 
                                     if (keys::pressed(keys::Sc::ActivePrev)) {
@@ -1222,9 +1523,32 @@ int main(int argc, char **argv) {
                                     }
 
                                     // delete all keypoints on a frame
+                                    // Confirmed: this erases every keypoint
+                                    // for every animal on the frame, and the
+                                    // key sits next to the ones that delete a
+                                    // single point. Lifting the hover gate
+                                    // also made it reachable with the cursor
+                                    // on a keypoint, where a stray press is
+                                    // most likely to be aimed at that one.
                                     if (keys::pressed(keys::Sc::DeleteAllKp)) {
-                                        annotations.erase(current_frame_num);
-                                        keypoints_find = false;
+                                        const int frame = current_frame_num;
+                                        const auto it = annotations.find(frame);
+                                        const size_t n_animals =
+                                            it != annotations.end()
+                                                ? it->second.size() : 0;
+                                        if (n_animals > 0)
+                                            popups.pushConfirm(
+                                                "Delete all keypoints?",
+                                                "Frame " + std::to_string(frame) +
+                                                    ": every keypoint on every "
+                                                    "camera for " +
+                                                    std::to_string(n_animals) +
+                                                    (n_animals == 1 ? " instance"
+                                                                    : " instances") +
+                                                    " will be removed.",
+                                                [&annotations, frame]() {
+                                                    annotations.erase(frame);
+                                                });
                                     }
                                 }
                             }
@@ -1238,10 +1562,68 @@ int main(int argc, char **argv) {
 
                             if (keypoints_find && skeleton.has_skeleton &&
                                 display.show_keypoints && !peek_raw) {
-                                gui_plot_keypoints(
-                                    annotations.at(current_frame_num),
-                                    &skeleton, j, scene->num_cams,
-                                    active_keypoint_color(user_settings));
+                                // Every animal in the frame. The one being
+                                // edited draws full strength; the rest are
+                                // tinted and dimmed so they read as context.
+                                auto &fis_draw = annotations.at(current_frame_num);
+                                int grabbed = -1;
+                                // The animal being edited is drawn LAST.
+                                // Coincident keypoints are legitimate -- two
+                                // fish whose noses overlap in one view really
+                                // do share a pixel -- and ImGui gives a
+                                // contested hover to whichever item was
+                                // submitted last. Drawing in index order meant
+                                // the highest-numbered animal always won that
+                                // tie, so reaching for the one you were editing
+                                // could grab another and, since a grab selects
+                                // its animal, switch you to it. Last-drawn now
+                                // matches what already looks foremost: the
+                                // active animal draws full strength, the rest
+                                // dimmed.
+                                auto draw_instance = [&](size_t inst) {
+                                    using KC = DisplayState::KeypointColoring;
+                                    std::vector<ImVec4> node_cols;
+                                    if (display.keypoint_coloring == KC::ByInstance)
+                                        node_cols.assign(
+                                            skeleton.num_nodes,
+                                            instance_color(pm.annotation_config.label_info,
+                                                           fis_draw[inst].instance_id,
+                                                           (int)inst));
+                                    // The error in this camera, for colouring
+                                    // and for hovering a triangulated point.
+                                    std::vector<double> node_errs;
+                                    if (j < pm.camera_params.size())
+                                        node_errs = reprojection_errors_px(
+                                            fis_draw[inst], (int)j, skeleton.num_nodes,
+                                            pm.camera_params[j],
+                                            (double)scene->image_height[j]);
+                                    if (display.keypoint_coloring == KC::ByReprojError &&
+                                        !node_errs.empty())
+                                        for (double e : node_errs)
+                                            node_cols.push_back(reprojection_error_color(e));
+                                    if (gui_plot_keypoints(
+                                            fis_draw[inst], &skeleton, j,
+                                            scene->num_cams,
+                                            active_keypoint_color(user_settings),
+                                            (int)inst,
+                                            (int)inst == active_instance,
+                                            display.show_keypoint_names,
+                                            node_cols.empty() ? nullptr : &node_cols,
+                                            node_errs.empty() ? nullptr : &node_errs))
+                                        grabbed = (int)inst;
+                                };
+                                for (size_t inst = 0; inst < fis_draw.size(); inst++)
+                                    if ((int)inst != active_instance)
+                                        draw_instance(inst);
+                                if (active_instance >= 0 &&
+                                    active_instance < (int)fis_draw.size())
+                                    draw_instance((size_t)active_instance);
+                                // Grabbing an animal's keypoint selects that
+                                // animal, so the table, Triangulate and the
+                                // rest follow the hand rather than needing a
+                                // separate radio-button click first.
+                                if (grabbed >= 0)
+                                    active_instance = grabbed;
                             }
 
                             // Read-only prediction overlay. Skipped once the
@@ -1258,7 +1640,8 @@ int main(int argc, char **argv) {
                                 if (pose)
                                     gui_plot_prediction_overlay(
                                         pose, j, &skeleton, pm.camera_params,
-                                        scene);
+                                        scene, 0.0f, 0.9f,
+                                        display.show_keypoint_names);
                             }
 
                         }
@@ -1271,25 +1654,36 @@ int main(int argc, char **argv) {
                             int nn = skeleton.num_nodes;
                             int nc = (int)scene->num_cams;
 
-                            // Bbox tool
+                            // Bbox tool. Boxes go on the instance being
+                            // edited, which takes the selected class.
+                            auto &label_info = pm.annotation_config.label_info;
                             if (win.bbox.enabled) {
-                                bbox_handle_input(win.bbox, annotations,
-                                                  frame, j, nn, nc, iw, ih);
+                                bbox_handle_input(win.bbox, label_info,
+                                                  annotations, frame, j,
+                                                  active_instance, nn, nc,
+                                                  iw, ih);
+                                bbox_draw_cursor(win.bbox, label_info, annotations,
+                                                 frame, j, active_instance);
+                                bbox_draw_menu(win.bbox, label_info, annotations,
+                                               frame, j, active_instance);
                             }
                             if (display.show_bboxes) {
-                                bbox_draw_overlays(win.bbox, annotations,
-                                                   frame, j, iw, ih);
+                                bbox_draw_overlays(win.bbox, label_info,
+                                                   annotations, frame, j,
+                                                   active_instance, iw, ih);
                             }
 
                             // OBB tool
                             if (win.obb.enabled) {
-                                obb_handle_input(win.obb, win.bbox,
+                                obb_handle_input(win.obb, win.bbox, label_info,
                                                  annotations, frame, j,
-                                                 nn, nc, iw, ih);
+                                                 active_instance, nn, nc,
+                                                 iw, ih);
                             }
                             if (display.show_bboxes) {
-                                obb_draw_overlays(win.obb, win.bbox,
-                                                  annotations, frame, j, iw, ih);
+                                obb_draw_overlays(win.obb, win.bbox, label_info,
+                                                  annotations, frame, j,
+                                                  active_instance, iw, ih);
                             }
 
                             // Midline tool (line drawing in the line camera)
@@ -1304,12 +1698,74 @@ int main(int argc, char **argv) {
 
                         }
 
-                        // Plot context menu: press 1 key while hovering
+                        // The view's menu: a right-click on an empty spot --
+                        // a keypoint or a box under the pointer opens its own
+                        // menu instead. On release, and not after a drag: a
+                        // right-drag is ImPlot's box zoom.
                         if (ImPlot::IsPlotHovered() &&
-                            keys::pressed(keys::Sc::PlotMenu)) {
+                            ImGui::IsMouseReleased(ImGuiMouseButton_Right) &&
+                            ImGui::GetIO().MouseDragMaxDistanceSqr[ImGuiMouseButton_Right] <
+                                ImGui::GetIO().MouseDragThreshold *
+                                    ImGui::GetIO().MouseDragThreshold &&
+                            !keypoint_hovered_now() && !box_hovered_recently() &&
+                            !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
                             ImGui::OpenPopup("##plot_settings");
                         }
                         if (ImGui::BeginPopup("##plot_settings")) {
+                            // Who is NOT in this camera on this frame: an
+                            // explicit negative (tailcycle's `absent`), not
+                            // just "not labelled yet". Drawing a box there
+                            // clears it.
+                            ImGui::SeparatorText("This Camera");
+                            {
+                                const u32 f = (u32)current_frame_num;
+                                auto it = annotations.find(f);
+                                if (it == annotations.end() || it->second.empty()) {
+                                    // Every instance the frames around it have.
+                                    if (ImGui::MenuItem("No animal here (mark all absent)")) {
+                                        for (auto &fa : create_frame_instances(
+                                                 annotations, f, skeleton.num_nodes,
+                                                 (int)scene->num_cams))
+                                            if (j < fa.cameras.size())
+                                                set_absent(fa.cameras[j], true);
+                                    }
+                                } else {
+                                    const auto &info = pm.annotation_config.label_info;
+                                    // Everyone at once: nobody is in this camera.
+                                    bool all = true;
+                                    for (auto &fa : it->second)
+                                        if (j < fa.cameras.size() && !fa.cameras[j].is_absent())
+                                            all = false;
+                                    if (ImGui::MenuItem("Mark all absent here", nullptr, false,
+                                                        !all))
+                                        for (auto &fa : it->second)
+                                            if (j < fa.cameras.size())
+                                                set_absent(fa.cameras[j], true);
+                                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                                        ImGui::SetTooltip("No animal is in this camera on this "
+                                                          "frame: every instance absent,\nits boxes here removed.");
+                                    // One toggle each: inline for a few, in a
+                                    // submenu for more so the menu stays short.
+                                    auto toggles = [&]() {
+                                        for (auto &fa : it->second) {
+                                            if (j >= fa.cameras.size()) continue;
+                                            auto &cam = fa.cameras[j];
+                                            const bool absent = cam.is_absent();
+                                            const std::string item =
+                                                info.instance_name(fa.instance_id) +
+                                                " absent here";
+                                            if (ImGui::MenuItem(item.c_str(), nullptr, absent))
+                                                set_absent(cam, !absent);
+                                        }
+                                    };
+                                    if (it->second.size() <= 3) {
+                                        toggles();
+                                    } else if (ImGui::BeginMenu("Each instance")) {
+                                        toggles();
+                                        ImGui::EndMenu();
+                                    }
+                                }
+                            }
                             ImGui::SeparatorText("Plot Settings");
                             if (ImGui::MenuItem("Fit X Axis"))
                                 ImPlot::SetupAxisLimits(ImAxis_X1, 0, scene->image_width[j]);
@@ -1321,7 +1777,35 @@ int main(int argc, char **argv) {
                             }
                             ImGui::SeparatorText("Visibility");
                             ImGui::Checkbox("Keypoints", &display.show_keypoints);
+                            ImGui::Checkbox("Keypoint names", &display.show_keypoint_names);
                             ImGui::Checkbox("Bounding Boxes", &display.show_bboxes);
+                            ImGui::SeparatorText("Keypoint Colours");
+                            using KC = DisplayState::KeypointColoring;
+                            auto &kc = display.keypoint_coloring;
+                            if (ImGui::RadioButton("By keypoint", kc == KC::ByNode))
+                                kc = KC::ByNode;
+                            if (ImGui::RadioButton("By instance", kc == KC::ByInstance))
+                                kc = KC::ByInstance;
+                            // Needs a calibration to project the 3D points.
+                            ImGui::BeginDisabled(project_is_2d(pm));
+                            if (ImGui::RadioButton("By reprojection error",
+                                                   kc == KC::ByReprojError))
+                                kc = KC::ByReprojError;
+                            ImGui::EndDisabled();
+                            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                                ImGui::SetTooltip(
+                                    "Placed vs. where the 3D point projects, measured "
+                                    "when T solves.\nGrey without 3D.");
+                            // Where the colours change, tuned here while they
+                            // show (saved as a preference).
+                            if (kc == KC::ByReprojError) {
+                                float good = user_settings.reproj_good_px;
+                                float bad = user_settings.reproj_bad_px;
+                                ImGui::Indent();
+                                if (reproj_threshold_bar("##reproj_bar", good, bad))
+                                    set_reproj_thresholds(ctx, good, bad);
+                                ImGui::Unindent();
+                            }
                             ImGui::EndPopup();
                         }
 
@@ -1331,6 +1815,50 @@ int main(int argc, char **argv) {
                     ImGui::EndChild();
                 }
                 ImGui::End();
+            }
+
+            // Cycle which camera view is in front. The default layout docks
+            // every camera into the central node as tabs, so only one is
+            // visible at a time and reaching another meant clicking its tab.
+            // Focusing a docked window is what selects its tab.
+            if (ps.video_loaded && scene->num_cams > 1 &&
+                !pm.camera_names.empty() &&
+                (int)view_dock_id.size() >= scene->num_cams &&
+                keys::pressed(keys::Sc::NextView)) {
+                const int n = std::min((int)scene->num_cams,
+                                       (int)pm.camera_names.size());
+                int cur = 0;
+                for (int v = 0; v < n && v < (int)is_view_focused.size(); ++v)
+                    if (is_view_focused[v]) { cur = v; break; }
+
+                // Only the views sharing the focused view's dock node, in
+                // order. Cycling across nodes was the bug with a split layout:
+                // the other pane is already visible, so bringing one of its
+                // tabs forward moved focus away from the pane the cursor was
+                // in, and hover put it straight back.
+                std::vector<int> group;
+                for (int v = 0; v < n; ++v)
+                    if (view_dock_id[v] == view_dock_id[cur])
+                        group.push_back(v);
+
+                if (group.size() > 1) {
+                    int at = 0;
+                    for (size_t i = 0; i < group.size(); ++i)
+                        if (group[i] == cur) { at = (int)i; break; }
+                    // Shift reverses, like the seek keys. Not a second binding
+                    // with shift=true: mods_ok only enforces the modifiers a
+                    // binding requires and does not forbid extras, so plain Tab
+                    // would match Shift+Tab as well and both would fire.
+                    const int step = ImGui::GetIO().KeyShift
+                                         ? (int)group.size() - 1 : 1;
+                    const int next = group[(at + step) % (int)group.size()];
+                    ImGui::SetWindowFocus(pm.camera_names[next].c_str());
+                    for (int v = 0; v < (int)is_view_focused.size(); ++v)
+                        is_view_focused[v] = (v == next);
+                    // The cursor has not moved, so let it re-assert focus only
+                    // once it actually enters a different view.
+                    last_hovered_view = next;
+                }
             }
 
             if (keys::pressed(keys::Sc::PlayPause)) {
@@ -1347,13 +1875,6 @@ int main(int argc, char **argv) {
             }
 
 
-            if (keys::pressed(keys::Sc::SeekBack)) {
-                seek_relative(ImGui::GetIO().KeyShift ? -10 : -1);
-            }
-
-            if (keys::pressed(keys::Sc::SeekFwd)) {
-                seek_relative(ImGui::GetIO().KeyShift ? 10 : 1);
-            }
 
             for (const auto &[name, flag] : window_need_decoding) {
                 window_was_decoding[name] = flag.load();
@@ -1393,22 +1914,65 @@ int main(int argc, char **argv) {
 #endif
 
         // Window title
-        glfwSetWindowTitle(window->render_target, "Red");
+        // "Red -- <project>", "Red -- Untitled", or "Red"; set on change only.
+        {
+            static std::string shown_title;
+            std::string title = "Red";
+            if (pm.untitled)
+                title += " \xE2\x80\x94 Untitled";
+            else if (!pm.project_name.empty())
+                title += " \xE2\x80\x94 " + pm.project_name;
+            if (title != shown_title) {
+                glfwSetWindowTitle(window->render_target, title.c_str());
+                shown_title = title;
+            }
+        }
 
         if (ps.just_seeked) {
             ps.just_seeked = false;
         } else {
             if (dc_context->decoding_flag && ps.play_video &&
                 scene->num_cams > 0 && scene->display_buffer) {
-                int frame_to_show = ps.to_display_frame_number;
-                // Cap to slowest decoded camera (applied in both modes)
-                int min_decoded_frame = INT_MAX;
-                for (const auto &[cam_name, visible] : window_need_decoding) {
-                    if (visible.load()) {
-                        int decoded = latest_decoded_frame[cam_name].load();
-                        min_decoded_frame =
-                            std::min(min_decoded_frame, decoded);
+                // A camera that decoded through to its end has replaced a
+                // derived count with the real one, so the timeline's length
+                // follows rather than being fixed at load.
+                if (dc_context->total_owned_by_loader) {
+                    const int len = dc_context->longest_cam_frames();
+                    if (len > 0) {
+                        dc_context->set_frame_count(len);
                     }
+                }
+                int frame_to_show = ps.to_display_frame_number;
+                // Cap to slowest decoded camera (applied in both modes).
+                // A camera that has reached its own last frame is not slow,
+                // it is finished, and counting it would peg the cap at its
+                // end and stall every other camera -- the same stall the sync
+                // path avoids with trailing fill. Skipped here instead, and
+                // its view is drawn blank past that point. With every camera
+                // the same length (the normal case) nothing is ever skipped
+                // before the timeline ends, so this changes nothing there.
+                int min_decoded_frame = INT_MAX;
+                for (size_t ci = 0; ci < pm.camera_names.size(); ci++) {
+                    const std::string &cam_name = pm.camera_names[ci];
+                    auto vis = window_need_decoding.find(cam_name);
+                    if (vis == window_need_decoding.end() ||
+                        !vis->second.load())
+                        continue;
+                    // Compared against the camera's own last frame, not
+                    // against how far it has decoded: a seek resets the
+                    // latter, so keying off it left an already-finished
+                    // camera pinning the cap wherever it happened to sit.
+                    const int cam_frames =
+                        dc_context->per_cam_contiguous
+                            ? dc_context->cam_frames((int)ci)
+                            : 0;
+                    const int cam_end = cam_frames > 0 ? cam_frames - 1 : -1;
+                    if (cam_end >= 0 &&
+                        cam_end <= ps.to_display_frame_number)
+                        continue;
+                    min_decoded_frame = std::min(
+                        min_decoded_frame,
+                        latest_decoded_frame[cam_name].load());
                 }
 
                 // CHOOSE MODE
@@ -1420,6 +1984,29 @@ int main(int argc, char **argv) {
                     // --- Tick-based mode: advance one frame per render tick,
                     //     but never past what the decoder has filled ---
                     frame_to_show = ps.to_display_frame_number + 1;
+                }
+                // Is decoding keeping up? The clock's frame (capped at the
+                // last one, so reaching the end does not count) against what
+                // the decoders allow. Keeping up, the gap stays near one
+                // frame; not keeping up, it opens and grows. Half a second of
+                // video behind for over a second counts -- a frame count per
+                // window, which inst_speed is, jitters at slow speeds (1/4x is
+                // under four frames per half second) and read as a shortfall.
+                if (ps.realtime_playback) {
+                    const int clock_frame =
+                        std::min(frame_to_show, dc_context->total_num_frame - 1);
+                    const int gap = clock_frame - std::min(clock_frame,
+                                                           min_decoded_frame);
+                    const double half_second = std::max(
+                        2.0, 0.5 * dc_context->video_fps * ps.set_playback_speed);
+                    const double t = ImGui::GetTime();
+                    if (gap > half_second) {
+                        if (ps.behind_since < 0) ps.behind_since = t;
+                        ps.falling_behind = t - ps.behind_since > 1.0;
+                    } else {
+                        ps.behind_since = -1.0;
+                        ps.falling_behind = false;
+                    }
                 }
                 frame_to_show = std::min(frame_to_show, min_decoded_frame);
                 frame_to_show =

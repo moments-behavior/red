@@ -25,7 +25,28 @@
 
 struct ExportWindowState {
     bool show = false;
-    int format_idx = 0; // 0=JARVIS, 1=COCO, 2=DLC, 3=YOLO Pose, 4=YOLO Detect, 5=Nerfstudio
+    int format_idx = 0; // 0=JARVIS, 1=COCO, 2=DLC, 3=YOLO Pose, 4=YOLO Detect, 5=Nerfstudio, 6=tailcycle
+    // A format to select the next time the window draws, as an
+    // ExportFormats::Format; -1 for none. The combo's indices depend on which
+    // formats this project and this build offer, so a caller that wants a
+    // particular one cannot just set format_idx.
+    int want_format = -1;
+    // One row per session to write. The format makes split a directory level,
+    // so a session belongs wholly to one split -- you build train/val/test by
+    // exporting several ranges, not by ratio-splitting one. Frame-level random
+    // splits are what rule 14 warns against: at 180 fps, frame N in train and
+    // N+1 in val are near-identical, so the val score measures memorisation.
+    struct TailcycleRange {
+        int start = 0;
+        int end = 0;            // inclusive; 0 with start 0 means "whole video"
+        int split_idx = 0;      // train | val | test
+    };
+    std::vector<TailcycleRange> tailcycle_ranges{{}};
+    char tailcycle_session_id[128] = "";
+    int tailcycle_layers = 0;   // 2D | 2D+3D | 3D only
+    bool tailcycle_around_labels = false;
+    int tailcycle_window = 32;  // clip frames around each label
+    std::string tailcycle_range_error;
     bool include_video_index = false; // JARVIS: include video_index.json
     int scale_factor = 1; // JARVIS: write calibration so 3D reconstructs in (mm × scale_factor)
     std::string output_dir;
@@ -38,6 +59,7 @@ struct ExportWindowState {
 
     // Progress counters (written by export thread via atomic, read by main thread)
     std::atomic<int> images_saved{0};
+    std::atomic<bool> cancel_requested{false};
     int images_total = 0; // set before thread launch, read-only during export
 
     // Thread → main thread communication for final status.
@@ -69,7 +91,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         state.finished.store(false, std::memory_order_relaxed);
     }
 
-    DrawPanel("Export Tool", state.show,
+    DrawPanel("Export", state.show,
         [&]() {
 
         // Format selector. Nerfstudio/3DGS needs camera calibration, so it is
@@ -87,6 +109,21 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
             format_labels.push_back("Nerfstudio / 3DGS");
             format_map.push_back(ExportFormats::NERFSTUDIO);
         }
+        // Offered only when this build has Arrow. Hiding it beats showing a
+        // button that always fails -- same reason Nerfstudio is hidden for
+        // uncalibrated projects.
+        if (TailcycleExport::available()) {
+            format_labels.push_back("tailcycle-dataset");
+            format_map.push_back(ExportFormats::TAILCYCLE);
+        }
+        if (state.want_format >= 0) {
+            for (size_t i = 0; i < format_map.size(); i++)
+                if ((int)format_map[i] == state.want_format) {
+                    state.format_idx = (int)i;
+                    break;
+                }
+            state.want_format = -1;
+        }
         if (state.format_idx >= (int)format_labels.size())
             state.format_idx = 0;
         ImGui::Combo("Export Format", &state.format_idx, format_labels.data(),
@@ -94,6 +131,163 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
 
         auto fmt = format_map[state.format_idx];
         bool is_jarvis = (fmt == ExportFormats::JARVIS);
+
+        // Frames in the loaded media. tailcycle validates every frame index
+        // against this and uses it for "to the end of the recording".
+        int tc_total = 0;
+        if (ctx.input_is_imgs)
+            tc_total = (int)ctx.imgs_names.size();
+        else if (!ctx.demuxers.empty() && ctx.demuxers[0])
+            tc_total = (int)ctx.demuxers[0]->GetNumFrames();
+
+        // tailcycle-specific: one row per session, plus the 3D layer.
+        if (fmt == ExportFormats::TAILCYCLE) {
+            if (state.tailcycle_layers == 0) {
+                ImGui::TextDisabled("2D: one session per video, named after the video.");
+            } else {
+                if (state.tailcycle_session_id[0] == '\0')
+                    snprintf(state.tailcycle_session_id,
+                             sizeof(state.tailcycle_session_id), "%s",
+                             pm.project_name.c_str());
+                // One folder name: a / or \\ would nest folders, which no
+                // tailcycle reader finds, so they become _ as they are typed.
+                ImGui::InputText("Session ID", state.tailcycle_session_id,
+                                 sizeof(state.tailcycle_session_id),
+                                 ImGuiInputTextFlags_CallbackCharFilter,
+                                 [](ImGuiInputTextCallbackData *d) {
+                                     if (d->EventChar == '/' || d->EventChar == '\\')
+                                         d->EventChar = '_';
+                                     return 0;
+                                 });
+                ImGui::SetItemTooltip(
+                    "Becomes the folder name, which IS the session id (one name: / "
+                    "becomes _). Shared by every row below -- the split directory "
+                    "keeps them apart.");
+            }
+
+            ImGui::SeparatorText("Splits");
+            ImGui::TextDisabled("One session per row. End at 0 means to the end of the recording (%d frames).",
+                                tc_total);
+            ImGui::TextDisabled(
+                "Frames are extracted into each group, so the dataset is "
+                "self-contained.");
+            ImGui::Checkbox("Only frames around labels", &state.tailcycle_around_labels);
+            ImGui::SetItemTooltip(
+                "Export a clip of consecutive frames centred on each labelled frame "
+                "instead of the whole range; overlapping clips merge into one group.");
+            if (state.tailcycle_around_labels) {
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(160);
+                ImGui::SliderInt("Clip frames", &state.tailcycle_window, 1, 256);
+                state.tailcycle_window = std::max(1, state.tailcycle_window);
+            }
+            const int tc_window = state.tailcycle_around_labels ? state.tailcycle_window : 0;
+            static const char *kSplits[] = {"train", "val", "test"};
+            int remove_at = -1;
+            for (size_t i = 0; i < state.tailcycle_ranges.size(); i++) {
+                auto &r = state.tailcycle_ranges[i];
+                ImGui::PushID((int)i);
+                ImGui::SetNextItemWidth(90);
+                ImGui::InputInt("##start", &r.start, 0, 0);
+                if (r.start < 0) r.start = 0;
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(90);
+                ImGui::InputInt("##end", &r.end, 0, 0);
+                if (r.end < 0) r.end = 0;
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(90);
+                ImGui::Combo("##split", &r.split_idx, kSplits, 3);
+                ImGui::SameLine();
+                ImGui::BeginDisabled(state.tailcycle_ranges.size() == 1);
+                if (ImGui::Button("x")) remove_at = (int)i;
+                ImGui::EndDisabled();
+                // What the row will write: how many labelled frames fall in it
+                // (a split without any is empty), the frames exported (the
+                // clips, when only frames around labels are kept), and the
+                // images. An unedited row means the whole recording, the most
+                // expensive thing the export can do, so it is never a surprise.
+                {
+                    const int last = (r.end > 0 && r.end < tc_total) ? r.end
+                                     : (tc_total > 0 ? tc_total - 1 : r.start);
+                    const auto labelled_frames = ExportFormats::tailcycle_labelled_frames(
+                        amap, -1, state.tailcycle_layers, r.start, last);
+                    int n = last >= r.start ? last - r.start + 1 : 0;
+                    if (tc_window > 0) {
+                        n = 0;
+                        for (const auto &[a, b] : ExportFormats::tailcycle_clips(
+                                 labelled_frames, r.start, last, tc_window))
+                            n += b - a + 1;
+                    }
+                    const long long imgs = ExportFormats::tailcycle_image_estimate(
+                        amap, (int)pm.camera_names.size(), state.tailcycle_layers, r.start, last,
+                        tc_window);
+                    ImGui::SameLine();
+                    const ImVec4 warn(0.95f, 0.65f, 0.3f, 1.0f);
+                    if (labelled_frames.empty())
+                        ImGui::TextColored(warn, "no labelled frames in this range");
+                    else if (r.end == 0 && tc_total > 0 && tc_window <= 0)
+                        ImGui::TextColored(warn, "%d labelled \xC2\xB7 to end: %d frames \xC2\xB7 %lld images",
+                                           (int)labelled_frames.size(), n, imgs);
+                    else
+                        ImGui::TextDisabled("%d labelled \xC2\xB7 %d frames \xC2\xB7 %lld images",
+                                            (int)labelled_frames.size(), n, imgs);
+                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                        ImGui::SetTooltip(
+                            state.tailcycle_layers == 0
+                                ? "labelled: frames in the range with a label in any camera.\n"
+                                  "frames: what is exported%s.\n"
+                                  "images: 2D writes one session per camera, each with the "
+                                  "frames\naround ITS labels -- so the total need not be a "
+                                  "multiple of the cameras."
+                                : "labelled: frames in the range with a label.\n"
+                                  "frames: what is exported%s.\n"
+                                  "images: frames x cameras.",
+                            tc_window > 0 ? " (the clips around labels)" : " (the whole range)");
+                }
+                ImGui::PopID();
+            }
+            if (remove_at >= 0)
+                state.tailcycle_ranges.erase(state.tailcycle_ranges.begin() + remove_at);
+            if (ImGui::Button("+ Add split"))
+                state.tailcycle_ranges.push_back({});
+
+            // Overlapping ranges are the leak rule 14 exists to prevent, and a
+            // validator only warns about it -- so catch it here, where it can
+            // still be fixed.
+            std::string range_err;
+            for (size_t i = 0; i < state.tailcycle_ranges.size() && range_err.empty(); i++) {
+                const auto &a = state.tailcycle_ranges[i];
+                if (a.end != 0 && a.end < a.start) range_err = "A range ends before it starts.";
+                for (size_t j = i + 1; j < state.tailcycle_ranges.size(); j++) {
+                    const auto &b = state.tailcycle_ranges[j];
+                    const int ae = a.end ? a.end : INT_MAX, be = b.end ? b.end : INT_MAX;
+                    if (a.start <= be && b.start <= ae) {
+                        range_err = "Ranges overlap -- the same frames would land in "
+                                    "two splits.";
+                        break;
+                    }
+                    if (a.split_idx == b.split_idx)
+                        range_err = "Two rows share a split, so they would write the "
+                                    "same session folder twice.";
+                }
+            }
+            if (!range_err.empty())
+                ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.3f, 1.0f), "%s", range_err.c_str());
+            state.tailcycle_range_error = range_err;
+
+            ImGui::Spacing();
+            static const char *kLayers[] = {"2D keypoints", "2D keypoints + 3D",
+                                            "3D only"};
+            ImGui::Combo("Labels", &state.tailcycle_layers, kLayers, 3);
+            ImGui::SetItemTooltip(
+                "2D keypoints: one session per video, named after the video.\n"
+                "2D + 3D: also ships red's triangulated solve, for a consumer that "
+                "wants these exact numbers rather than its own.\n"
+                "3D only: the honest choice when the 2D are themselves "
+                "reprojections of a 3D solve -- writing both would store the same "
+                "information twice.");
+
+        }
 
         // JARVIS-specific: video index checkbox
         if (is_jarvis) {
@@ -143,8 +337,8 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         ImGui::Text("Cameras:      %d", (int)pm.camera_names.size());
 
         int kp_count = 0;
-        for (const auto &[f, fa] : amap)
-            if (frame_has_any_keypoints(fa)) ++kp_count;
+        for (const auto &[f, fis] : amap)
+            if (any_instance_has_labels(fis)) ++kp_count;
         ImGui::Text("Annotated:    %d frames", kp_count);
 
         ImGui::SeparatorText("Output");
@@ -164,8 +358,11 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
 
         bool is_nerfstudio = (fmt == ExportFormats::NERFSTUDIO);
 
-        // Common options (not applicable to Nerfstudio)
-        if (!is_nerfstudio) {
+        // Train Ratio and Random Seed drive a frame-level shuffle split, which
+        // only the 2D formats do. Nerfstudio uses every annotated frame, and
+        // tailcycle makes split a directory level with explicit frame ranges --
+        // showing a ratio for either would be a control that does nothing.
+        if (!is_nerfstudio && fmt != ExportFormats::TAILCYCLE) {
             ImGui::SliderFloat("Train Ratio", &state.train_ratio, 0.5f, 0.99f);
             ImGui::InputInt("Random Seed", &state.seed);
         }
@@ -211,6 +408,14 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     validation_error = "Output directory not set";
                 } else if (pm.camera_names.empty()) {
                     validation_error = "No cameras loaded";
+                } else if (dispatch_fmt == ExportFormats::TAILCYCLE &&
+                           !state.tailcycle_range_error.empty()) {
+                    validation_error = state.tailcycle_range_error;
+                } else if (dispatch_fmt == ExportFormats::TAILCYCLE &&
+                           pm.media_folder.empty()) {
+                    validation_error =
+                        "No media folder set -- the group length must come from "
+                        "the recording, not the labels";
                 } else {
                     // Auto-save annotations before export so CSVs on disk are current.
                     // JARVIS reads from disk; other formats use AnnotationMap directly
@@ -220,8 +425,10 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                         std::string saved = AnnotationCSV::save_all(
                             pm.keypoints_root_folder, skeleton.name,
                             amap, ctx.scene ? (int)ctx.scene->num_cams : 0,
-                            skeleton.num_nodes, pm.camera_names, &save_err);
+                            skeleton.num_nodes, pm.camera_names, &save_err,
+                            &pm.annotation_config.label_info);
                         if (!saved.empty()) {
+                            mark_labels_saved(ctx);
                             // Update label folder to the freshly saved one
                             state.label_folder = saved;
                             state.label_display =
@@ -234,7 +441,24 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
 
                     // Compute total expected images for progress bar
                     state.images_saved.store(0, std::memory_order_relaxed);
-                    state.images_total = kp_count * (int)pm.camera_names.size();
+                    state.cancel_requested.store(false, std::memory_order_relaxed);
+                    // tailcycle extracts a frame range, not one image per
+                    // annotated frame, so kp_count is the wrong denominator --
+                    // it made the progress bar read 1717 / 813416.
+                    if (dispatch_fmt == ExportFormats::TAILCYCLE) {
+                        int tc_frames = 0;
+                        for (const auto &r : state.tailcycle_ranges) {
+                            const int last = (r.end > 0 && r.end < tc_total)
+                                                 ? r.end
+                                                 : (tc_total > 0 ? tc_total - 1 : r.start);
+                            tc_frames += (int)ExportFormats::tailcycle_image_estimate(
+                                amap, (int)pm.camera_names.size(), state.tailcycle_layers, r.start,
+                                last, state.tailcycle_around_labels ? state.tailcycle_window : 0);
+                        }
+                        state.images_total = tc_frames;
+                    } else {
+                        state.images_total = kp_count * (int)pm.camera_names.size();
+                    }
                     state.in_progress.store(true, std::memory_order_relaxed);
                     state.status = "Exporting...";
 
@@ -246,11 +470,26 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     ecfg.output_folder      = state.output_dir;
                     ecfg.camera_names       = pm.camera_names;
                     ecfg.skeleton_name      = skeleton.name;
+                    ecfg.class_names        = ctx.pm.annotation_config.label_info.names;
                     ecfg.num_keypoints      = skeleton.num_nodes;
                     ecfg.bbox_margin        = state.margin;
                     ecfg.train_ratio        = state.train_ratio;
                     ecfg.seed               = state.seed;
                     ecfg.jpeg_quality       = state.jpeg_quality;
+                    // Remembered for next time, any format, any project.
+                    {
+                        UserSettings &us = ctx.user_settings;
+                        if (us.jarvis_margin != state.margin ||
+                            us.jarvis_train_ratio != state.train_ratio ||
+                            us.jarvis_seed != state.seed ||
+                            us.jarvis_jpeg_quality != state.jpeg_quality) {
+                            us.jarvis_margin = state.margin;
+                            us.jarvis_train_ratio = state.train_ratio;
+                            us.jarvis_seed = state.seed;
+                            us.jarvis_jpeg_quality = state.jpeg_quality;
+                            save_user_settings(us);
+                        }
+                    }
                     ecfg.camera_params      = pm.camera_params;
                     ecfg.telecentric        = pm.telecentric;
                     ecfg.scale_factor       = state.scale_factor;
@@ -270,6 +509,30 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     for (const auto &e : skeleton.edges)
                         ecfg.edges.push_back({e.x, e.y});
 
+                    std::vector<ExportWindowState::TailcycleRange> tc_rows;
+                    if (dispatch_fmt == ExportFormats::TAILCYCLE) {
+                        // One folder name, whatever it came from (a typed
+                        // one is already clean; a project name may not be).
+                        ecfg.tailcycle_session_id = state.tailcycle_session_id;
+                        for (char &ch : ecfg.tailcycle_session_id)
+                            if (ch == '/' || ch == '\\') ch = '_';
+                        ecfg.tailcycle_layers = state.tailcycle_layers;
+                        ecfg.tailcycle_window =
+                            state.tailcycle_around_labels ? state.tailcycle_window : 0;
+                        // n_frames must describe the media, not the labels: every
+                        // frame index in the tables is validated against it, and
+                        // the annotation range is usually a sparse subset.
+                        if (ctx.input_is_imgs) {
+                            ecfg.tailcycle_n_frames = (int)ctx.imgs_names.size();
+                        } else if (!ctx.demuxers.empty() && ctx.demuxers[0]) {
+                            ecfg.tailcycle_n_frames =
+                                (int)ctx.demuxers[0]->GetNumFrames();
+                            ecfg.tailcycle_fps =
+                                (float)ctx.demuxers[0]->GetFramerate();
+                        }
+                        tc_rows = state.tailcycle_ranges;
+                    }
+
                     // Copy the annotation map for thread safety
                     AnnotationMap amap_copy = amap;
 
@@ -281,10 +544,28 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     state.finished_status = result_status;
 
                     std::thread(
-                        [ecfg, amap_copy, result_status, &state]() {
+                        [ecfg, amap_copy, tc_rows, result_status, &state]() {
                             // Thread-local string for export_dataset to write into.
                             // No other thread touches this string.
                             std::string thread_status;
+                            if (ecfg.format == ExportFormats::TAILCYCLE) {
+                                // One session per row: split is a directory level,
+                                // so each range is its own export.
+                                static const char *kSplits[] = {"train", "val", "test"};
+                                for (const auto &r : tc_rows) {
+                                    ExportFormats::ExportConfig one = ecfg;
+                                    one.tailcycle_frame_start = r.start;
+                                    one.tailcycle_frame_end = r.end;
+                                    one.tailcycle_split = kSplits[r.split_idx];
+                                    std::string one_status;
+                                    const bool ok = ExportFormats::export_dataset(
+                                        one.format, one, amap_copy, &one_status,
+                                        &state.images_saved, &state.cancel_requested);
+                                    if (!thread_status.empty()) thread_status += "\n";
+                                    thread_status += one_status;
+                                    if (!ok) break;   // a refusal applies to them all
+                                }
+                            } else
                             ExportFormats::export_dataset(
                                 ecfg.format, ecfg, amap_copy, &thread_status,
                                 &state.images_saved);
@@ -303,6 +584,19 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
             ImGui::BeginDisabled();
             ImGui::Button("Exporting...");
             ImGui::EndDisabled();
+
+            // Extraction can run for a long time -- a whole recording across
+            // many cameras is hundreds of thousands of frames -- and the export
+            // runs on a detached thread, so without this the only way to stop it
+            // is quitting red, which leaves a half-written session behind.
+            ImGui::SameLine();
+            const bool cancelling = state.cancel_requested.load(std::memory_order_relaxed);
+            ImGui::BeginDisabled(cancelling);
+            if (ImGui::Button(cancelling ? "Cancelling..." : "Cancel"))
+                state.cancel_requested.store(true, std::memory_order_relaxed);
+            ImGui::EndDisabled();
+            if (cancelling)
+                ImGui::TextDisabled("Finishing the current frame, then removing the partial session.");
 
             // Progress bar
             if (state.images_total > 0) {

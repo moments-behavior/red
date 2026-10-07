@@ -95,7 +95,7 @@ static void test_make_frame_basic() {
         EXPECT_NEAR(fa.kp3d[k].x, UNLABELED, 1.0);
         EXPECT_NEAR(fa.kp3d[k].y, UNLABELED, 1.0);
         EXPECT_NEAR(fa.kp3d[k].z, UNLABELED, 1.0);
-        EXPECT_FALSE(fa.kp3d[k].triangulated);
+        EXPECT_FALSE(fa.kp3d[k].exist);
     }
 
     // All 2D keypoints should be UNLABELED
@@ -103,7 +103,7 @@ static void test_make_frame_basic() {
         EXPECT_EQ((int)fa.cameras[c].keypoints.size(), 6);
         for (int k = 0; k < 6; ++k) {
             EXPECT_NEAR(fa.cameras[c].keypoints[k].x, UNLABELED, 1.0);
-            EXPECT_FALSE(fa.cameras[c].keypoints[k].labeled);
+            EXPECT_FALSE(fa.cameras[c].keypoints[k].has_pos);
         }
     }
 }
@@ -151,7 +151,7 @@ static void test_frame_has_any_labels() {
     EXPECT_FALSE(frame_has_any_labels(fa));
 
     // Label one keypoint on camera 1
-    fa.cameras[1].keypoints[2].labeled = true;
+    fa.cameras[1].keypoints[2].set_manual();
     EXPECT_TRUE(frame_has_any_labels(fa));
 }
 
@@ -193,23 +193,23 @@ static void test_migration_roundtrip() {
     EXPECT_EQ((int)amap.size(), 1);
     EXPECT_TRUE(amap.find(10) != amap.end());
 
-    auto &fa = amap[10];
+    auto &fa = amap[10].front();
 
     // Check 2D keypoints survived migration
-    EXPECT_TRUE(fa.cameras[0].keypoints[0].labeled);
+    EXPECT_TRUE(fa.cameras[0].keypoints[0].has_pos);
     EXPECT_NEAR(fa.cameras[0].keypoints[0].x, 100.0, 0.001);
     EXPECT_NEAR(fa.cameras[0].keypoints[0].y, 200.0, 0.001);
-    EXPECT_TRUE(fa.cameras[0].keypoints[1].labeled);
-    EXPECT_FALSE(fa.cameras[0].keypoints[2].labeled); // node 2, cam 0 not labeled
-    EXPECT_TRUE(fa.cameras[1].keypoints[2].labeled);
+    EXPECT_TRUE(fa.cameras[0].keypoints[1].has_pos);
+    EXPECT_FALSE(fa.cameras[0].keypoints[2].has_pos); // node 2, cam 0 not labeled
+    EXPECT_TRUE(fa.cameras[1].keypoints[2].has_pos);
     EXPECT_NEAR(fa.cameras[1].keypoints[2].x, 500.0, 0.001);
 
     // Check 3D keypoints survived migration
-    EXPECT_TRUE(fa.kp3d[0].triangulated);
+    EXPECT_TRUE(fa.kp3d[0].exist);
     EXPECT_NEAR(fa.kp3d[0].x, 1.0, 0.001);
     EXPECT_NEAR(fa.kp3d[0].y, 2.0, 0.001);
     EXPECT_NEAR(fa.kp3d[0].z, 3.0, 0.001);
-    EXPECT_FALSE(fa.kp3d[1].triangulated); // not triangulated
+    EXPECT_FALSE(fa.kp3d[1].exist); // not triangulated
 
     // Check active_id
     EXPECT_EQ(fa.cameras[0].active_id, 1u);
@@ -278,7 +278,7 @@ static void test_json_empty_extended_data() {
     // Keypoints-only frame: should produce empty frames array in JSON
     AnnotationMap amap;
     auto &fa = get_or_create_frame(amap, 0, 3, 2);
-    fa.cameras[0].keypoints[0].labeled = true; // only keypoints
+    fa.cameras[0].keypoints[0].set_manual(); // only keypoints
 
     auto j = annotations_to_json(amap);
     EXPECT_TRUE(j["frames"].empty()); // no extended data to serialize
@@ -323,7 +323,7 @@ static void test_json_camera_index_out_of_bounds() {
     j["frames"] = nlohmann::json::array({jf});
 
     annotations_from_json(j, amap); // should not crash, silently skip
-    auto &cam0 = amap[5].cameras[0];
+    auto &cam0 = amap[5].front().cameras[0];
     EXPECT_FALSE(cam0.has_bbox()); // unchanged
 }
 
@@ -350,8 +350,8 @@ static void test_json_file_save_load() {
     get_or_create_frame(amap2, 3, 2, 1);
     EXPECT_TRUE(load_annotations_json(amap2, tmpdir));
 
-    EXPECT_TRUE(amap2[3].cameras[0].has_bbox());
-    EXPECT_NEAR(amap2[3].cameras[0].extras->bbox_x, 42.0, 0.001);
+    EXPECT_TRUE(amap2[3].front().cameras[0].has_bbox());
+    EXPECT_NEAR(amap2[3].front().cameras[0].extras->bbox_x, 42.0, 0.001);
 
     // Cleanup
     fs::remove_all(tmpdir);
@@ -457,14 +457,14 @@ static void test_get_labeled_frames() {
 
     // Frame 5: has labels
     auto &fa5 = get_or_create_frame(amap, 5, 2, 1);
-    fa5.cameras[0].keypoints[0].labeled = true;
+    fa5.cameras[0].keypoints[0].set_manual();
 
     // Frame 10: no labels
     get_or_create_frame(amap, 10, 2, 1);
 
     // Frame 15: has labels
     auto &fa15 = get_or_create_frame(amap, 15, 2, 1);
-    fa15.cameras[0].keypoints[1].labeled = true;
+    fa15.cameras[0].keypoints[1].set_manual();
 
     auto labeled = ExportFormats::get_labeled_frames(amap);
     EXPECT_EQ((int)labeled.size(), 2);
@@ -481,9 +481,9 @@ static void test_build_coco_json() {
     auto &fa = get_or_create_frame(amap, 1, 3, 2);
     // Label 2 of 3 keypoints on cam 0
     fa.cameras[0].keypoints[0].x = 100.0; fa.cameras[0].keypoints[0].y = 900.0; // ImPlot coords (Y from bottom)
-    fa.cameras[0].keypoints[0].labeled = true;
+    fa.cameras[0].keypoints[0].set_manual();
     fa.cameras[0].keypoints[1].x = 200.0; fa.cameras[0].keypoints[1].y = 800.0;
-    fa.cameras[0].keypoints[1].labeled = true;
+    fa.cameras[0].keypoints[1].set_manual();
     // keypoint 2 unlabeled
 
     ExportFormats::ExportConfig cfg;
@@ -562,7 +562,7 @@ static void test_build_coco_json_img_id_consistency() {
     // Frame 2: visible keypoints
     auto &fa2 = get_or_create_frame(amap, 2, 2, 1);
     fa2.cameras[0].keypoints[0].x = 50.0; fa2.cameras[0].keypoints[0].y = 50.0;
-    fa2.cameras[0].keypoints[0].labeled = true;
+    fa2.cameras[0].keypoints[0].set_manual();
 
     ExportFormats::ExportConfig cfg;
     cfg.node_names = {"a", "b"};
@@ -695,24 +695,89 @@ static void test_obb_contains_rotated() {
 static void test_bbox_next_class_color() {
     printf("  test_bbox_next_class_color...\n");
 
+    // Colours are valid and differ from class to class.
+    for (int i = 0; i < 6; ++i) {
+        const ImVec4 c = default_box_class_color(i);
+        EXPECT_TRUE(c.x >= 0 && c.x <= 1 && c.y >= 0 && c.y <= 1 &&
+                    c.z >= 0 && c.z <= 1 && c.w >= 0 && c.w <= 1);
+        if (i > 0) {
+            const ImVec4 p = default_box_class_color(i - 1);
+            EXPECT_TRUE(fabs(c.x - p.x) > 0.01 || fabs(c.y - p.y) > 0.01 ||
+                        fabs(c.z - p.z) > 0.01);
+        }
+    }
+}
+
+static void test_bbox_classes_and_target() {
+    printf("  test_bbox_classes_and_target...\n");
+
+    // The first box of a project with no classes makes Class_0.
     BBoxToolState state;
-    // Initial state has 1 class color
-    EXPECT_EQ((int)state.class_colors.size(), 1);
+    LabelInfo classes;
+    EXPECT_EQ(box_class_for_new(state, classes), 0);
+    EXPECT_EQ((int)classes.names.size(), 1);
+    EXPECT_TRUE(classes.names[0] == "Class_0");
+    add_box_class(state, classes);
+    EXPECT_TRUE(classes.names[1] == "Class_1");
+    EXPECT_EQ(state.current_class, 1);
 
-    auto c1 = state.next_class_color();
-    // Should be a valid color (all components in [0,1])
-    EXPECT_TRUE(c1.x >= 0 && c1.x <= 1);
-    EXPECT_TRUE(c1.y >= 0 && c1.y <= 1);
-    EXPECT_TRUE(c1.z >= 0 && c1.z <= 1);
-    EXPECT_TRUE(c1.w >= 0 && c1.w <= 1);
+    auto has_box = [](const CameraAnnotation &c) { return c.has_bbox(); };
 
-    // Adding a class and getting another color should be different
-    state.class_colors.push_back(c1);
-    auto c2 = state.next_class_color();
-    bool different = (fabs(c1.x - c2.x) > 0.01 ||
-                      fabs(c1.y - c2.y) > 0.01 ||
-                      fabs(c1.z - c2.z) > 0.01);
-    EXPECT_TRUE(different);
+    // A box goes on the instance being edited, not the frame's first.
+    AnnotationMap amap;
+    get_or_create_frame(amap, 5, 3, 2, /*instance_id*/ 0);
+    get_or_create_frame(amap, 5, 3, 2, /*instance_id*/ 7);
+    int active = 1;
+    FrameAnnotation &first = box_target(amap, 5, /*cam*/ 0, active, 3, 2, has_box);
+    EXPECT_EQ(first.instance_id, 7);
+    EXPECT_EQ(active, 1);
+    first.cameras[0].get_extras().has_bbox = true;
+
+    // It already has a box on camera 0: the next box goes on the next
+    // instance without one (wrapping to #0), which becomes the one edited.
+    FrameAnnotation &second = box_target(amap, 5, 0, active, 3, 2, has_box);
+    EXPECT_EQ(second.instance_id, 0);
+    EXPECT_EQ(active, 0);
+    EXPECT_EQ((int)amap[5].size(), 2);
+    second.cameras[0].get_extras().has_bbox = true;
+    // Every instance has one: a new instance, with the next unused id.
+    FrameAnnotation &third = box_target(amap, 5, 0, active, 3, 2, has_box);
+    EXPECT_EQ(third.instance_id, 8);
+    EXPECT_EQ(active, 2);
+    EXPECT_EQ((int)amap[5].size(), 3);
+    // On another camera, instance 7 has no box yet: it goes there.
+    active = 1;
+    EXPECT_EQ(box_target(amap, 5, /*cam*/ 1, active, 3, 2, has_box).instance_id, 7);
+
+    // A new frame starts with the previously labelled frame's instances
+    // (frame 5's 0, 7 and 8, unlabelled), and the box goes on the one at the
+    // edited place.
+    active = 1;
+    EXPECT_EQ(box_target(amap, 9, 0, active, 3, 2, has_box).instance_id, 7);
+    EXPECT_EQ(active, 1);
+    EXPECT_EQ((int)amap[9].size(), 3);
+    EXPECT_FALSE(amap[9][0].cameras[0].has_bbox());   // not carried over
+    // Every instance labelled anywhere: the frame with the most first, in
+    // its order, then the rest by id; an empty instance does not count.
+    AnnotationMap near;
+    get_or_create_frame(near, 3, 3, 2, 5);            // empty instance 5: skipped
+    get_or_create_frame(near, 0, 3, 2, 4).cameras[0].get_extras().absent = true;
+    get_or_create_frame(near, 6, 3, 2, 9).cameras[0].get_extras().absent = true;
+    get_or_create_frame(near, 6, 3, 2, 2).cameras[0].get_extras().absent = true;
+    const auto roster = instance_roster(near);
+    EXPECT_EQ((int)roster.size(), 3);
+    EXPECT_TRUE(roster.size() == 3 && roster[0].first == 9 && roster[1].first == 2 &&
+                roster[2].first == 4);
+    active = 1;
+    EXPECT_EQ(box_target(near, 4, 0, active, 3, 2, has_box).instance_id, 2);
+    EXPECT_EQ((int)near[4].size(), 3);
+    // With no labelled frame anywhere, just instance 0.
+    AnnotationMap lone;
+    get_or_create_frame(lone, 2, 3, 2, 5);            // empty instance 5
+    active = 2;
+    EXPECT_EQ(box_target(lone, 4, 0, active, 3, 2, has_box).instance_id, 0);
+    EXPECT_EQ(active, 0);
+    EXPECT_EQ((int)lone[4].size(), 1);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -726,8 +791,7 @@ static void test_annotation_config_defaults() {
     EXPECT_TRUE(cfg.enable_keypoints);
     EXPECT_FALSE(cfg.enable_bboxes);
     EXPECT_FALSE(cfg.enable_obbs);
-    EXPECT_EQ((int)cfg.class_names.size(), 1);
-    EXPECT_TRUE(cfg.class_names[0] == "animal");
+    EXPECT_TRUE(cfg.label_info.names.empty());   // the first box adds Class_0
 }
 
 static void test_annotation_config_json_roundtrip() {
@@ -736,7 +800,7 @@ static void test_annotation_config_json_roundtrip() {
     AnnotationConfig cfg;
     cfg.enable_bboxes = true;
     cfg.enable_obbs = true;
-    cfg.class_names = {"rat", "mouse", "fly"};
+    cfg.label_info.names = {"rat", "mouse", "fly"};
 
     nlohmann::json j;
     to_json(j, cfg);
@@ -747,10 +811,70 @@ static void test_annotation_config_json_roundtrip() {
     EXPECT_TRUE(cfg2.enable_keypoints);
     EXPECT_TRUE(cfg2.enable_bboxes);
     EXPECT_TRUE(cfg2.enable_obbs);
-    EXPECT_EQ((int)cfg2.class_names.size(), 3);
-    EXPECT_TRUE(cfg2.class_names[0] == "rat");
-    EXPECT_TRUE(cfg2.class_names[1] == "mouse");
-    EXPECT_TRUE(cfg2.class_names[2] == "fly");
+    // Box classes are saved with the labels, not the project file ...
+    EXPECT_FALSE(j.contains("class_names"));
+    EXPECT_TRUE(cfg2.label_info.names.empty());
+    // ... but an older project's are still read.
+    j["class_names"] = {"rat", "mouse"};
+    AnnotationConfig cfg3;
+    from_json(j, cfg3);
+    EXPECT_EQ((int)cfg3.label_info.names.size(), 2);
+    // The old automatic default is not a class anyone chose.
+    j["class_names"] = {"animal"};
+    AnnotationConfig cfg4;
+    from_json(j, cfg4);
+    EXPECT_TRUE(cfg4.label_info.names.empty());
+}
+
+// Box class names round-trip through annotations.json with the boxes.
+static void test_annotations_json_class_names() {
+    printf("  test_annotations_json_class_names...\n");
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "red_test_box_classes";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+
+    AnnotationMap amap;
+    auto &fa = get_or_create_frame(amap, 3, 2, 1, /*instance_id*/ 4);
+    fa.category_id = 1;
+    auto &e = fa.cameras[0].get_extras();
+    e.bbox_x = 1; e.bbox_y = 2; e.bbox_w = 30; e.bbox_h = 40; e.has_bbox = true;
+    LabelInfo classes;
+    classes.names = {"Class_0", "rat"};
+    classes.colors = {{-1.f, -1.f, -1.f}, {0.5f, 0.25f, 1.0f}};   // rat's picked
+    EXPECT_TRUE(save_annotations_json(amap, dir.string(), &classes));
+
+    AnnotationMap back;
+    get_or_create_frame(back, 3, 2, 1, 4);   // as the CSV loader would
+    LabelInfo loaded;
+    loaded.names = {"old"};
+    EXPECT_TRUE(load_annotations_json(back, dir.string(), &loaded));
+    EXPECT_TRUE(loaded.names == classes.names);
+    EXPECT_FALSE(loaded.has_color(0));
+    EXPECT_TRUE(loaded.has_color(1) && loaded.colors[1][1] == 0.25f);
+    EXPECT_EQ(back[3].front().category_id, 1);
+    EXPECT_TRUE(back[3].front().cameras[0].has_bbox());
+
+    // Instance names and colours, by id.
+    classes.instances[4].name = "Alice";
+    classes.instances[7].color = {0.1f, 0.2f, 0.3f};
+    classes.instances[9] = InstanceInfo{};   // nothing set: not written
+    EXPECT_TRUE(save_annotations_json(amap, dir.string(), &classes));
+    LabelInfo again;
+    EXPECT_TRUE(load_annotations_json(back, dir.string(), &again));
+    EXPECT_TRUE(again.instance_name(4) == "Alice");
+    EXPECT_TRUE(again.instance_name(5) == "#5");
+    EXPECT_TRUE(again.instances.count(7) && again.instances[7].has_color() &&
+                again.instances[7].color[2] == 0.3f);
+    EXPECT_FALSE(again.instances.count(9));
+
+    // A file without categories leaves the caller's list alone.
+    LabelInfo kept;
+    kept.names = {"animal"};
+    EXPECT_TRUE(save_annotations_json(amap, dir.string()));
+    EXPECT_TRUE(load_annotations_json(back, dir.string(), &kept));
+    EXPECT_TRUE(kept.names == std::vector<std::string>{"animal"});
+    fs::remove_all(dir);
 }
 
 static void test_annotation_config_backward_compat() {
@@ -768,7 +892,7 @@ static void test_annotation_config_backward_compat() {
     // Should have defaults
     EXPECT_TRUE(cfg.enable_keypoints);
     EXPECT_FALSE(cfg.enable_bboxes);
-    EXPECT_EQ((int)cfg.class_names.size(), 1);
+    EXPECT_TRUE(cfg.label_info.names.empty());
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -822,13 +946,13 @@ struct ExportTestFixture {
             for (int k = 0; k < 3; ++k) {
                 fa.cameras[0].keypoints[k].x = 100.0 + k * 50;
                 fa.cameras[0].keypoints[k].y = 300.0 - k * 20;
-                fa.cameras[0].keypoints[k].labeled = true;
+                fa.cameras[0].keypoints[k].set_manual();
             }
             // Label 2 of 3 on cam 1
             fa.cameras[1].keypoints[0].x = 120.0; fa.cameras[1].keypoints[0].y = 280.0;
-            fa.cameras[1].keypoints[0].labeled = true;
+            fa.cameras[1].keypoints[0].set_manual();
             fa.cameras[1].keypoints[1].x = 180.0; fa.cameras[1].keypoints[1].y = 250.0;
-            fa.cameras[1].keypoints[1].labeled = true;
+            fa.cameras[1].keypoints[1].set_manual();
         }
 
         // Config
@@ -1106,7 +1230,7 @@ static void test_export_missing_calibration() {
 
     AnnotationMap amap;
     auto &fa = get_or_create_frame(amap, 0, 2, 1);
-    fa.cameras[0].keypoints[0].labeled = true;
+    fa.cameras[0].keypoints[0].set_manual();
     fa.cameras[0].keypoints[0].x = 50; fa.cameras[0].keypoints[0].y = 50;
 
     ExportFormats::ExportConfig cfg;
@@ -1151,9 +1275,9 @@ static void test_build_coco_json_with_explicit_bbox() {
 
     // Label keypoints
     fa.cameras[0].keypoints[0].x = 100.0; fa.cameras[0].keypoints[0].y = 400.0;
-    fa.cameras[0].keypoints[0].labeled = true;
+    fa.cameras[0].keypoints[0].set_manual();
     fa.cameras[0].keypoints[1].x = 200.0; fa.cameras[0].keypoints[1].y = 300.0;
-    fa.cameras[0].keypoints[1].labeled = true;
+    fa.cameras[0].keypoints[1].set_manual();
 
     // Set explicit bbox (should be used instead of deriving from keypoints)
     auto &ext = fa.cameras[0].get_extras();
@@ -1198,19 +1322,19 @@ static void test_save_load_keypoints_roundtrip() {
         // Label some keypoints on cam 0
         fa.cameras[0].keypoints[0].x = 100.0 + f;
         fa.cameras[0].keypoints[0].y = 200.0 + f;
-        fa.cameras[0].keypoints[0].labeled = true;
+        fa.cameras[0].keypoints[0].set_manual();
         fa.cameras[0].keypoints[2].x = 300.0 + f;
         fa.cameras[0].keypoints[2].y = 400.0 + f;
-        fa.cameras[0].keypoints[2].labeled = true;
+        fa.cameras[0].keypoints[2].set_manual();
         // Label one keypoint on cam 1
         fa.cameras[1].keypoints[1].x = 500.0 + f;
         fa.cameras[1].keypoints[1].y = 600.0 + f;
-        fa.cameras[1].keypoints[1].labeled = true;
+        fa.cameras[1].keypoints[1].set_manual();
         // Set 3D for triangulated keypoint 0
         fa.kp3d[0].x = 1.0 + f;
         fa.kp3d[0].y = 2.0 + f;
         fa.kp3d[0].z = 3.0 + f;
-        fa.kp3d[0].triangulated = true;
+        fa.kp3d[0].set_triangulated();
     }
     EXPECT_EQ((int)amap.size(), 3);
 
@@ -1239,26 +1363,26 @@ static void test_save_load_keypoints_roundtrip() {
 
     // Verify data survived the roundtrip
     for (u32 f : {5u, 15u, 25u}) {
-        auto &fa = amap2[f];
+        auto &fa = amap2[f].front();
 
         // Cam 0, keypoint 0
-        EXPECT_TRUE(fa.cameras[0].keypoints[0].labeled);
+        EXPECT_TRUE(fa.cameras[0].keypoints[0].has_pos);
         EXPECT_NEAR(fa.cameras[0].keypoints[0].x, 100.0 + f, 0.01);
         EXPECT_NEAR(fa.cameras[0].keypoints[0].y, 200.0 + f, 0.01);
 
         // Cam 0, keypoint 1 should be unlabeled
-        EXPECT_FALSE(fa.cameras[0].keypoints[1].labeled);
+        EXPECT_FALSE(fa.cameras[0].keypoints[1].has_pos);
 
         // Cam 0, keypoint 2
-        EXPECT_TRUE(fa.cameras[0].keypoints[2].labeled);
+        EXPECT_TRUE(fa.cameras[0].keypoints[2].has_pos);
         EXPECT_NEAR(fa.cameras[0].keypoints[2].x, 300.0 + f, 0.01);
 
         // Cam 1, keypoint 1
-        EXPECT_TRUE(fa.cameras[1].keypoints[1].labeled);
+        EXPECT_TRUE(fa.cameras[1].keypoints[1].has_pos);
         EXPECT_NEAR(fa.cameras[1].keypoints[1].x, 500.0 + f, 0.01);
 
         // 3D keypoint 0
-        EXPECT_TRUE(fa.kp3d[0].triangulated);
+        EXPECT_TRUE(fa.kp3d[0].exist);
         EXPECT_NEAR(fa.kp3d[0].x, 1.0 + f, 0.01);
         EXPECT_NEAR(fa.kp3d[0].y, 2.0 + f, 0.01);
         EXPECT_NEAR(fa.kp3d[0].z, 3.0 + f, 0.01);
@@ -1282,7 +1406,7 @@ static void test_save_load_with_extended_data() {
     auto &fa = get_or_create_frame(amap, 10, 2, 1);
     fa.cameras[0].keypoints[0].x = 50.0;
     fa.cameras[0].keypoints[0].y = 100.0;
-    fa.cameras[0].keypoints[0].labeled = true;
+    fa.cameras[0].keypoints[0].set_manual();
     auto &bext = fa.cameras[0].get_extras();
     bext.bbox_x = 10.0;
     bext.bbox_y = 20.0;
@@ -1304,13 +1428,13 @@ static void test_save_load_with_extended_data() {
     EXPECT_EQ(rc, 0);
 
     // Verify keypoints survived
-    EXPECT_TRUE(amap2[10].cameras[0].keypoints[0].labeled);
-    EXPECT_NEAR(amap2[10].cameras[0].keypoints[0].x, 50.0, 0.01);
+    EXPECT_TRUE(amap2[10].front().cameras[0].keypoints[0].has_pos);
+    EXPECT_NEAR(amap2[10].front().cameras[0].keypoints[0].x, 50.0, 0.01);
 
     // Verify bbox survived
-    EXPECT_TRUE(amap2[10].cameras[0].has_bbox());
-    EXPECT_NEAR(amap2[10].cameras[0].extras->bbox_x, 10.0, 0.01);
-    EXPECT_NEAR(amap2[10].cameras[0].extras->bbox_h, 150.0, 0.01);
+    EXPECT_TRUE(amap2[10].front().cameras[0].has_bbox());
+    EXPECT_NEAR(amap2[10].front().cameras[0].extras->bbox_x, 10.0, 0.01);
+    EXPECT_NEAR(amap2[10].front().cameras[0].extras->bbox_h, 150.0, 0.01);
 
     fs::remove_all(tmpdir);
 }
@@ -1335,7 +1459,7 @@ static void test_yolo_pose_y_flip() {
     auto &fa = get_or_create_frame(amap, 100, 1, 1);
     // ImPlot y=400, image_height=480 → image y = 480-400 = 80
     fa.cameras[0].keypoints[0].x = 320.0; fa.cameras[0].keypoints[0].y = 400.0;
-    fa.cameras[0].keypoints[0].labeled = true;
+    fa.cameras[0].keypoints[0].set_manual();
 
     ExportFormats::ExportConfig cfg;
     cfg.calibration_folder = calib_dir;
@@ -1387,7 +1511,7 @@ static void test_dlc_y_flip() {
     auto &fa = get_or_create_frame(amap, 100, 1, 1);
     // Same coords: ImPlot y=400, h=480 → DLC y = 480-400 = 80
     fa.cameras[0].keypoints[0].x = 320.0; fa.cameras[0].keypoints[0].y = 400.0;
-    fa.cameras[0].keypoints[0].labeled = true;
+    fa.cameras[0].keypoints[0].set_manual();
 
     ExportFormats::ExportConfig cfg;
     cfg.calibration_folder = calib_dir;
@@ -1562,10 +1686,10 @@ static void test_bridge_keypoints_and_extended_roundtrip() {
     // Step 2: Bridge → AnnotationMap
     AnnotationMap amap = migrate_keypoints_map(km, skel, &scene);
     EXPECT_EQ((int)amap.size(), 1);
-    EXPECT_TRUE(amap[50].cameras[0].keypoints[0].labeled);
+    EXPECT_TRUE(amap[50].front().cameras[0].keypoints[0].has_pos);
 
     // Step 3: Add bbox via AnnotationMap (simulating annotation tool)
-    auto &bext = amap[50].cameras[0].get_extras();
+    auto &bext = amap[50].front().cameras[0].get_extras();
     bext.bbox_x = 50.0;
     bext.bbox_y = 100.0;
     bext.bbox_w = 200.0;
@@ -1588,17 +1712,17 @@ static void test_bridge_keypoints_and_extended_roundtrip() {
     // Step 6: Verify keypoints survived
     EXPECT_EQ((int)amap2.size(), 1);
     EXPECT_TRUE(amap2.count(50));
-    EXPECT_TRUE(amap2[50].cameras[0].keypoints[0].labeled);
-    EXPECT_NEAR(amap2[50].cameras[0].keypoints[0].x, 100.0, 0.01);
-    EXPECT_NEAR(amap2[50].cameras[0].keypoints[0].y, 200.0, 0.01);
-    EXPECT_TRUE(amap2[50].cameras[0].keypoints[1].labeled);
-    EXPECT_TRUE(amap2[50].cameras[1].keypoints[0].labeled);
+    EXPECT_TRUE(amap2[50].front().cameras[0].keypoints[0].has_pos);
+    EXPECT_NEAR(amap2[50].front().cameras[0].keypoints[0].x, 100.0, 0.01);
+    EXPECT_NEAR(amap2[50].front().cameras[0].keypoints[0].y, 200.0, 0.01);
+    EXPECT_TRUE(amap2[50].front().cameras[0].keypoints[1].has_pos);
+    EXPECT_TRUE(amap2[50].front().cameras[1].keypoints[0].has_pos);
 
     // Step 7: Verify bbox survived
-    EXPECT_TRUE(amap2[50].cameras[0].has_bbox());
-    EXPECT_NEAR(amap2[50].cameras[0].extras->bbox_x, 50.0, 0.01);
-    EXPECT_NEAR(amap2[50].cameras[0].extras->bbox_w, 200.0, 0.01);
-    EXPECT_NEAR(amap2[50].cameras[0].extras->bbox_h, 300.0, 0.01);
+    EXPECT_TRUE(amap2[50].front().cameras[0].has_bbox());
+    EXPECT_NEAR(amap2[50].front().cameras[0].extras->bbox_x, 50.0, 0.01);
+    EXPECT_NEAR(amap2[50].front().cameras[0].extras->bbox_w, 200.0, 0.01);
+    EXPECT_NEAR(amap2[50].front().cameras[0].extras->bbox_h, 300.0, 0.01);
 
     // Step 8: Simulate user editing keypoints → refresh_keypoints_in_amap
     kp->kp2d[0][2].position = {175.0, 275.0};
@@ -1606,11 +1730,11 @@ static void test_bridge_keypoints_and_extended_roundtrip() {
     refresh_keypoints_in_amap(amap, km, skel, &scene);
 
     // Bbox should still be there after refresh
-    EXPECT_TRUE(amap[50].cameras[0].has_bbox());
-    EXPECT_NEAR(amap[50].cameras[0].extras->bbox_x, 50.0, 0.01);
+    EXPECT_TRUE(amap[50].front().cameras[0].has_bbox());
+    EXPECT_NEAR(amap[50].front().cameras[0].extras->bbox_x, 50.0, 0.01);
     // New keypoint should be reflected
-    EXPECT_TRUE(amap[50].cameras[0].keypoints[2].labeled);
-    EXPECT_NEAR(amap[50].cameras[0].keypoints[2].x, 175.0, 0.01);
+    EXPECT_TRUE(amap[50].front().cameras[0].keypoints[2].has_pos);
+    EXPECT_NEAR(amap[50].front().cameras[0].keypoints[2].x, 175.0, 0.01);
 
     // Cleanup
     for (auto &[f, k] : km)  free_keypoints(k, &scene);
@@ -1629,8 +1753,8 @@ static void test_refresh_empty_keypoints_map() {
     // Start with populated amap, sync from empty km → amap should become empty
     AnnotationMap amap;
     get_or_create_frame(amap, 10, 3, 2);
-    amap[10].cameras[0].keypoints[0].labeled = true;
-    amap[10].cameras[0].get_extras().has_bbox = true;
+    amap[10].front().cameras[0].keypoints[0].set_manual();
+    amap[10].front().cameras[0].get_extras().has_bbox = true;
     EXPECT_EQ((int)amap.size(), 1);
 
     std::map<u32, KeyPoints *> km; // empty
@@ -1661,8 +1785,8 @@ static void test_refresh_null_keypoints_skipped() {
     EXPECT_EQ((int)amap.size(), 1);
     EXPECT_TRUE(amap.count(20));
     EXPECT_FALSE(amap.count(10));
-    EXPECT_TRUE(amap[20].cameras[0].keypoints[0].labeled);
-    EXPECT_NEAR(amap[20].cameras[0].keypoints[0].x, 42.0, 0.001);
+    EXPECT_TRUE(amap[20].front().cameras[0].keypoints[0].has_pos);
+    EXPECT_NEAR(amap[20].front().cameras[0].keypoints[0].x, 42.0, 0.001);
 
     free_keypoints(km[20], &scene);
 }
@@ -1693,12 +1817,12 @@ static void test_refresh_preserves_bbox_on_update() {
     // Refresh should update keypoints but keep bbox/obb
     refresh_keypoints_in_amap(amap, km, skel, &scene);
 
-    EXPECT_TRUE(amap[5].cameras[0].keypoints[0].labeled);
-    EXPECT_NEAR(amap[5].cameras[0].keypoints[0].x, 10.0, 0.001);
-    EXPECT_TRUE(amap[5].cameras[0].has_bbox());
-    EXPECT_NEAR(amap[5].cameras[0].extras->bbox_x, 100.0, 0.001);
-    EXPECT_TRUE(amap[5].cameras[0].has_obb());
-    EXPECT_NEAR(amap[5].cameras[0].extras->obb_cx, 150.0, 0.001);
+    EXPECT_TRUE(amap[5].front().cameras[0].keypoints[0].has_pos);
+    EXPECT_NEAR(amap[5].front().cameras[0].keypoints[0].x, 10.0, 0.001);
+    EXPECT_TRUE(amap[5].front().cameras[0].has_bbox());
+    EXPECT_NEAR(amap[5].front().cameras[0].extras->bbox_x, 100.0, 0.001);
+    EXPECT_TRUE(amap[5].front().cameras[0].has_obb());
+    EXPECT_NEAR(amap[5].front().cameras[0].extras->obb_cx, 150.0, 0.001);
 
     free_keypoints(km[5], &scene);
 }
@@ -1728,7 +1852,7 @@ static void test_refresh_adds_new_frames() {
     EXPECT_EQ((int)amap.size(), 2);
     EXPECT_TRUE(amap.count(10));
     EXPECT_TRUE(amap.count(20));
-    EXPECT_TRUE(amap[20].cameras[0].keypoints[0].labeled);
+    EXPECT_TRUE(amap[20].front().cameras[0].keypoints[0].has_pos);
 
     for (auto &[f, kp] : km) free_keypoints(kp, &scene);
 }
@@ -1779,8 +1903,8 @@ static void test_refresh_new_frame_gets_keypoints() {
     // Should have created the frame with keypoints
     EXPECT_EQ((int)amap.size(), 1);
     EXPECT_TRUE(amap.count(5));
-    EXPECT_TRUE(amap[5].cameras[0].keypoints[0].labeled);
-    EXPECT_NEAR(amap[5].cameras[0].keypoints[0].x, 99.0, 0.001);
+    EXPECT_TRUE(amap[5].front().cameras[0].keypoints[0].has_pos);
+    EXPECT_NEAR(amap[5].front().cameras[0].keypoints[0].x, 99.0, 0.001);
 
     free_keypoints(km[5], &scene);
 }
@@ -1828,10 +1952,10 @@ static void test_migrate_multi_frame() {
 
     for (u32 f : {0u, 100u, 500u, 999u}) {
         EXPECT_TRUE(amap.count(f));
-        EXPECT_EQ((int)amap[f].cameras.size(), 2);
-        EXPECT_EQ((int)amap[f].kp3d.size(), 4);
-        EXPECT_TRUE(amap[f].cameras[0].keypoints[0].labeled);
-        EXPECT_NEAR(amap[f].cameras[0].keypoints[0].x, (double)f, 0.001);
+        EXPECT_EQ((int)amap[f].front().cameras.size(), 2);
+        EXPECT_EQ((int)amap[f].front().kp3d.size(), 4);
+        EXPECT_TRUE(amap[f].front().cameras[0].keypoints[0].has_pos);
+        EXPECT_NEAR(amap[f].front().cameras[0].keypoints[0].x, (double)f, 0.001);
     }
 
     for (auto &[f, kp] : km) free_keypoints(kp, &scene);
@@ -1865,7 +1989,7 @@ static void test_export_coco_single_camera() {
     AnnotationMap amap;
     auto &fa = get_or_create_frame(amap, 10, 2, 1);
     fa.cameras[0].keypoints[0].x = 100.0; fa.cameras[0].keypoints[0].y = 300.0;
-    fa.cameras[0].keypoints[0].labeled = true;
+    fa.cameras[0].keypoints[0].set_manual();
 
     ExportFormats::ExportConfig cfg;
     cfg.calibration_folder = calib_dir;
@@ -1946,7 +2070,7 @@ static void test_export_coco_y_flip_consistency() {
     auto &fa = get_or_create_frame(amap, 10, 1, 1);
     // ImPlot y=400, h=480 → image y = 80
     fa.cameras[0].keypoints[0].x = 320.0; fa.cameras[0].keypoints[0].y = 400.0;
-    fa.cameras[0].keypoints[0].labeled = true;
+    fa.cameras[0].keypoints[0].set_manual();
 
     ExportFormats::ExportConfig cfg;
     cfg.calibration_folder = calib_dir;
@@ -1982,9 +2106,9 @@ static void test_export_yolo_detect_has_no_keypoints() {
     AnnotationMap amap;
     auto &fa = get_or_create_frame(amap, 10, 2, 1);
     fa.cameras[0].keypoints[0].x = 100.0; fa.cameras[0].keypoints[0].y = 300.0;
-    fa.cameras[0].keypoints[0].labeled = true;
+    fa.cameras[0].keypoints[0].set_manual();
     fa.cameras[0].keypoints[1].x = 200.0; fa.cameras[0].keypoints[1].y = 250.0;
-    fa.cameras[0].keypoints[1].labeled = true;
+    fa.cameras[0].keypoints[1].set_manual();
 
     ExportFormats::ExportConfig cfg;
     cfg.calibration_folder = calib_dir;
@@ -2049,7 +2173,7 @@ static void test_json_obb_roundtrip() {
     get_or_create_frame(amap2, 7, 1, 1);
     annotations_from_json(j, amap2);
 
-    auto &cam2 = amap2[7].cameras[0];
+    auto &cam2 = amap2[7].front().cameras[0];
     EXPECT_TRUE(cam2.has_obb());
     EXPECT_NEAR(cam2.extras->obb_cx, 100.5, 0.001);
     EXPECT_NEAR(cam2.extras->obb_angle, 0.785, 0.001);
@@ -2071,10 +2195,10 @@ static void test_json_combined_bbox_obb() {
     get_or_create_frame(amap2, 1, 1, 2);
     annotations_from_json(j, amap2);
 
-    EXPECT_TRUE(amap2[1].cameras[0].has_bbox());
-    EXPECT_FALSE(amap2[1].cameras[0].has_obb());
-    EXPECT_TRUE(amap2[1].cameras[1].has_obb());
-    EXPECT_NEAR(amap2[1].cameras[0].extras->bbox_w, 100.0, 0.001);
+    EXPECT_TRUE(amap2[1].front().cameras[0].has_bbox());
+    EXPECT_FALSE(amap2[1].front().cameras[0].has_obb());
+    EXPECT_TRUE(amap2[1].front().cameras[1].has_obb());
+    EXPECT_NEAR(amap2[1].front().cameras[0].extras->bbox_w, 100.0, 0.001);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2086,12 +2210,12 @@ static void test_get_or_create_frame_idempotent() {
     AnnotationMap amap;
 
     auto &fa1 = get_or_create_frame(amap, 10, 3, 2);
-    fa1.cameras[0].keypoints[0].labeled = true;
+    fa1.cameras[0].keypoints[0].set_manual();
 
     auto &fa2 = get_or_create_frame(amap, 10, 3, 2);
     // Should return same frame, not create a new one
     EXPECT_EQ((int)amap.size(), 1);
-    EXPECT_TRUE(fa2.cameras[0].keypoints[0].labeled);
+    EXPECT_TRUE(fa2.cameras[0].keypoints[0].has_pos);
 }
 
 static void test_make_frame_sizes_match() {
@@ -2135,8 +2259,13 @@ static void test_keypoint_clipboard_ops() {
 
     // Source: node0 labeled in cam0; node1 labeled in cam1 + 3D; node2 empty
     FrameAnnotation src = make_frame(NN, NC, 10);
-    src.cameras[0].keypoints[0] = Keypoint2D{100.0, 200.0, true, 0.5f, LabelSource::Manual};
-    src.cameras[1].keypoints[1] = Keypoint2D{ 11.0,  22.0, true, 0.0f, LabelSource::Manual};
+    src.cameras[0].keypoints[0].x = 100.0;
+    src.cameras[0].keypoints[0].y = 200.0;
+    src.cameras[0].keypoints[0].confidence = 0.5f;
+    src.cameras[0].keypoints[0].set_manual();
+    src.cameras[1].keypoints[1].x = 11.0;
+    src.cameras[1].keypoints[1].y = 22.0;
+    src.cameras[1].keypoints[1].set_manual();
     src.kp3d[1].x = 1.0; src.kp3d[1].y = 2.0; src.kp3d[1].z = 3.0;
     src.kp3d[1].set_triangulated();
 
@@ -2155,51 +2284,200 @@ static void test_keypoint_clipboard_ops() {
 
     // Paste overwrites, including a pre-existing label on node0/cam0
     FrameAnnotation dst = make_frame(NN, NC, 20);
-    dst.cameras[0].keypoints[0] = Keypoint2D{5.0, 5.0, true, 1.0f, LabelSource::Predicted};
+    dst.cameras[0].keypoints[0].x = 5.0;
+    dst.cameras[0].keypoints[0].y = 5.0;
+    dst.cameras[0].keypoints[0].set_predicted(1.0f);
     int pasted = paste_keypoints(kc, dst, NN, NC);
     EXPECT_EQ(pasted, 2);
-    EXPECT_TRUE(dst.cameras[0].keypoints[0].labeled);
+    EXPECT_TRUE(dst.cameras[0].keypoints[0].has_pos);
     EXPECT_NEAR(dst.cameras[0].keypoints[0].x, 100.0, 1e-9);
     EXPECT_NEAR(dst.cameras[0].keypoints[0].y, 200.0, 1e-9);
-    EXPECT_TRUE(dst.cameras[1].keypoints[1].labeled);
+    EXPECT_TRUE(dst.cameras[1].keypoints[1].has_pos);
     EXPECT_NEAR(dst.cameras[1].keypoints[1].x, 11.0, 1e-9);
-    EXPECT_TRUE(dst.kp3d[1].triangulated);
+    EXPECT_TRUE(dst.kp3d[1].exist);
     EXPECT_NEAR(dst.kp3d[1].z, 3.0, 1e-9);
     // node2 (skipped) and node3 (unselected) stay unlabeled
-    EXPECT_FALSE(dst.cameras[0].keypoints[2].labeled);
-    EXPECT_FALSE(dst.cameras[0].keypoints[3].labeled);
+    EXPECT_FALSE(dst.cameras[0].keypoints[2].has_pos);
+    EXPECT_FALSE(dst.cameras[0].keypoints[3].has_pos);
 
     // Delete one camera only
     delete_node_from_camera(dst, 0, 0);
-    EXPECT_FALSE(dst.cameras[0].keypoints[0].labeled);
+    EXPECT_FALSE(dst.cameras[0].keypoints[0].has_pos);
 
     // Delete a node across all cameras also clears its (now unsupported) 3D
     delete_node_all_cameras(dst, 1, NC);
     for (int c = 0; c < NC; ++c)
-        EXPECT_FALSE(dst.cameras[c].keypoints[1].labeled);
-    EXPECT_FALSE(dst.kp3d[1].triangulated);
+        EXPECT_FALSE(dst.cameras[c].keypoints[1].has_pos);
+    EXPECT_FALSE(dst.kp3d[1].exist);
 
     // Delete a selected set from all cameras
     FrameAnnotation d2 = make_frame(NN, NC, 30);
     for (int c = 0; c < NC; ++c)
         for (int k = 0; k < NN; ++k)
-            d2.cameras[c].keypoints[k].labeled = true;
+            d2.cameras[c].keypoints[k].set_manual();
     KeypointClipboard kc2;
     kc2.ensure_size(NN);
     kc2.selected[0] = kc2.selected[3] = 1; // delete nodes 0 and 3
     int del = delete_selected_all_cameras(kc2, d2, NN, NC);
     EXPECT_EQ(del, 2);
     for (int c = 0; c < NC; ++c) {
-        EXPECT_FALSE(d2.cameras[c].keypoints[0].labeled);
-        EXPECT_TRUE(d2.cameras[c].keypoints[1].labeled);
-        EXPECT_TRUE(d2.cameras[c].keypoints[2].labeled);
-        EXPECT_FALSE(d2.cameras[c].keypoints[3].labeled);
+        EXPECT_FALSE(d2.cameras[c].keypoints[0].has_pos);
+        EXPECT_TRUE(d2.cameras[c].keypoints[1].has_pos);
+        EXPECT_TRUE(d2.cameras[c].keypoints[2].has_pos);
+        EXPECT_FALSE(d2.cameras[c].keypoints[3].has_pos);
     }
 
     // Resizing to a new node count drops any stale selection
     kc.ensure_size(NN + 2);
     EXPECT_EQ((int)kc.selected.size(), NN + 2);
     EXPECT_FALSE(kc.any());
+}
+
+// Instances survive a CSV save and load by id; a v4 file (a build that
+// briefly wrote a class column) and a v3 one both still read.
+static void test_csv_class_and_instance() {
+    printf("  test_csv_class_and_instance...\n");
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "red_test_csv_instances";
+    fs::remove_all(root);
+    fs::create_directories(root);
+
+    AnnotationMap amap;
+    get_or_create_frame(amap, 2, 1, 1, 0);
+    get_or_create_frame(amap, 2, 1, 1, 3);
+    // (Looked up after both exist: adding one moves the others.)
+    auto &a = *find_instance(amap[2], 0);
+    auto &b = *find_instance(amap[2], 3);
+    a.cameras[0].keypoints[0].x = 10; a.cameras[0].keypoints[0].y = 11;
+    a.cameras[0].keypoints[0].has_pos = true; a.cameras[0].keypoints[0].set_manual();
+    b.cameras[0].keypoints[0].x = 20; b.cameras[0].keypoints[0].y = 21;
+    b.cameras[0].keypoints[0].has_pos = true; b.cameras[0].keypoints[0].set_manual();
+
+    std::string err;
+    const std::string folder = AnnotationCSV::save_all(
+        root.string(), "s", amap, 1, 1, {"Cam0"}, &err);
+    EXPECT_FALSE(folder.empty());
+    AnnotationMap back;
+    EXPECT_EQ(AnnotationCSV::load_all(folder, back, "s", 1, 1, {"Cam0"}, err), 0);
+    const FrameAnnotation *ra = find_instance(back[2], 0);
+    const FrameAnnotation *rb = find_instance(back[2], 3);
+    EXPECT_TRUE(ra && rb);
+    if (ra && rb) {
+        EXPECT_NEAR(ra->cameras[0].keypoints[0].x, 10.0, 1e-9);
+        EXPECT_NEAR(rb->cameras[0].keypoints[0].x, 20.0, 1e-9);
+    }
+
+    for (const char *hdr : {"frame,instance,x0,y0,c0,s0\n4,3,5,6,,\n",
+                            "frame,class,instance,x0,y0,c0,s0\n4,0,3,5,6,,\n"}) {
+        {
+            std::ofstream f(root / "old.csv");
+            f << "#red_csv v3\n#skeleton s\n" << hdr;
+        }
+        AnnotationMap old;
+        EXPECT_TRUE(AnnotationCSV::load_2d_csv((root / "old.csv").string(), old, 0, 1, 1, err));
+        const FrameAnnotation *r = find_instance(old[4], 3);
+        EXPECT_TRUE(r && r->cameras[0].keypoints[0].x == 5);
+    }
+    fs::remove_all(root);
+}
+
+// Boxes with classes: every instance becomes a line with its class, frames
+// with boxes and no keypoints are exported, and data.yaml names the classes.
+static void test_export_yolo_box_classes() {
+    printf("  test_export_yolo_box_classes...\n");
+    namespace fs = std::filesystem;
+
+    ExportTestFixture fix;
+    fix.amap.clear();
+    // Frame 200: two instances, classes 0 and 1, boxes only.
+    get_or_create_frame(fix.amap, 200, 3, 2, 0);
+    get_or_create_frame(fix.amap, 200, 3, 2, 1);
+    for (int i = 0; i < 2; ++i) {
+        auto &fa = *find_instance(fix.amap[200], i);
+        fa.category_id = i;
+        auto &e = fa.cameras[0].get_extras();
+        e.bbox_x = 10 + 100 * i; e.bbox_y = 20; e.bbox_w = 50; e.bbox_h = 40;
+        e.has_bbox = true;
+    }
+    fix.cfg.class_names = {"rat", "mouse"};
+    fix.cfg.train_ratio = 1.0f;
+    std::string status;
+    EXPECT_TRUE(ExportFormats::export_yolo(fix.cfg, fix.amap, false, &status));
+
+    std::ifstream y(fix.output_dir + "/data.yaml");
+    std::string yaml((std::istreambuf_iterator<char>(y)), std::istreambuf_iterator<char>());
+    EXPECT_TRUE(yaml.find("nc: 2") != std::string::npos);
+    EXPECT_TRUE(yaml.find("names: ['rat', 'mouse']") != std::string::npos);
+
+    std::vector<int> classes;
+    for (const char *split : {"train", "val"}) {
+        const fs::path p = fs::path(fix.output_dir) / "labels" / split / "cam0" / "Frame_200.txt";
+        if (!fs::exists(p)) continue;
+        std::ifstream f(p);
+        std::string line;
+        while (std::getline(f, line)) classes.push_back(std::stoi(line));
+    }
+    EXPECT_EQ((int)classes.size(), 2);
+    EXPECT_TRUE(classes.size() == 2 && classes[0] == 0 && classes[1] == 1);
+}
+
+// "Not in this camera": an absent mark drops the box, survives
+// annotations.json, and a frame where it is the only label still goes to
+// YOLO -- as an image with an empty label file (a background).
+static void test_absent_mark() {
+    printf("  test_absent_mark...\n");
+    namespace fs = std::filesystem;
+    CameraAnnotation cam;
+    auto &e = cam.get_extras();
+    e.bbox_w = 10; e.bbox_h = 10; e.has_bbox = true;
+    set_absent(cam, true);
+    EXPECT_TRUE(cam.is_absent());
+    EXPECT_FALSE(cam.has_bbox());
+
+    ExportTestFixture fix;
+    fix.amap.clear();
+    auto &fa = get_or_create_frame(fix.amap, 300, 3, 2);
+    set_absent(fa.cameras[0], true);
+    EXPECT_TRUE(frame_has_any_labels(fa));
+
+    const fs::path dir = fs::path(fix.output_dir) / "json";
+    fs::create_directories(dir);
+    EXPECT_TRUE(save_annotations_json(fix.amap, dir.string()));
+    AnnotationMap back;
+    get_or_create_frame(back, 300, 3, 2);
+    EXPECT_TRUE(load_annotations_json(back, dir.string()));
+    EXPECT_TRUE(back[300].front().cameras[0].is_absent());
+    EXPECT_FALSE(back[300].front().cameras[1].is_absent());
+
+    fix.cfg.train_ratio = 1.0f;
+    std::string status;
+    EXPECT_TRUE(ExportFormats::export_yolo(fix.cfg, fix.amap, false, &status));
+    bool empty_label = false;
+    for (const char *split : {"train", "val"}) {
+        const fs::path p = fs::path(fix.output_dir) / "labels" / split / "cam0" / "Frame_300.txt";
+        if (fs::exists(p)) empty_label = fs::file_size(p) == 0;
+    }
+    EXPECT_TRUE(empty_label);
+    EXPECT_TRUE(status.find("Note:") == std::string::npos);   // nothing undecided
+    // cam1 has nothing on that frame, not even an absent mark: no label file
+    // (and no image), rather than a false background.
+    bool cam1_label = false;
+    for (const char *split : {"train", "val"})
+        cam1_label |= fs::exists(fs::path(fix.output_dir) / "labels" / split / "cam1" /
+                                 "Frame_300.txt");
+    EXPECT_FALSE(cam1_label);
+
+    // A second instance, boxed on cam0, while #0 there is neither boxed nor
+    // absent: exported as is, with a note saying so.
+    set_absent(fix.amap[300].front().cameras[0], false);
+    get_or_create_frame(fix.amap, 300, 3, 2, 1);
+    {
+        auto &e1 = find_instance(fix.amap[300], 1)->cameras[0].get_extras();
+        e1.bbox_x = 10; e1.bbox_y = 10; e1.bbox_w = 20; e1.bbox_h = 20; e1.has_bbox = true;
+    }
+    EXPECT_TRUE(ExportFormats::export_yolo(fix.cfg, fix.amap, false, &status));
+    EXPECT_TRUE(status.find("1 camera view has an instance with neither") !=
+                std::string::npos);
 }
 
 int main() {
@@ -2248,6 +2526,9 @@ int main() {
 
     printf("\n--- Bbox Tool ---\n");
     test_bbox_next_class_color();
+    test_bbox_classes_and_target();
+    test_annotations_json_class_names();
+    test_csv_class_and_instance();
 
     printf("\n--- AnnotationConfig ---\n");
     test_annotation_config_defaults();
@@ -2261,6 +2542,8 @@ int main() {
     printf("\n--- Export Pipeline: YOLO ---\n");
     test_export_yolo_pose_full_pipeline();
     test_export_yolo_detect_no_keypoints();
+    test_export_yolo_box_classes();
+    test_absent_mark();
 
     printf("\n--- Export Pipeline: DeepLabCut ---\n");
     test_export_deeplabcut_full_pipeline();

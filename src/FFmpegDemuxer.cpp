@@ -582,11 +582,20 @@ FFmpegDemuxer::FFmpegDemuxer(AVFormatContext *fmtcx) : fmtc(fmtcx) {
     pktSei.data = nullptr;
     pktSei.size = 0;
 
-    // Initialize Annex.B BSF;
+    // Annex-B conversion applies only to H.264 and HEVC carried in MP4,
+    // where NAL units are length-prefixed and a decoder wants start codes.
+    // Every other codec is passed through untouched.
+    //
+    // This used to fall through to the literal string "unknown" for anything
+    // that was not H.264, HEVC or VP9, and then ask libavcodec for a bitstream
+    // filter by that name. There is no such filter, so it threw and
+    // load_videos skipped the camera: "can't get unknown filter by name". An
+    // MPEG-4 Part 2 recording -- 3DPOP's pigeon videos are one -- could not be
+    // opened at all, even though FFmpeg2NvCodecId already maps AV_CODEC_ID_MPEG4
+    // and the software decoder handles it without help.
     const string bfs_name = is_mp4H264   ? "h264_mp4toannexb"
                             : is_mp4HEVC ? "hevc_mp4toannexb"
-                            : is_VP9     ? string()
-                                         : "unknown";
+                                         : string();
 
     if (!bfs_name.empty()) {
         const AVBitStreamFilter *toAnnexB =

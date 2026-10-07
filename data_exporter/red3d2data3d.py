@@ -25,6 +25,13 @@ def convert(input_path, output_path):
         rows = list(csv.reader(f))
 
     # Strip leading comment/header lines (#red_csv, #skeleton, column header).
+    # Columns between frame and x0: none in v2, instance in v3, class and
+    # instance in v4. Read off the column header.
+    id_cols = 0
+    for r in rows:
+        if r and r[0] == "frame":
+            id_cols = next((i - 1 for i, c in enumerate(r) if c.startswith("x")), 0)
+            break
     data_rows = [r for r in rows if r and not r[0].startswith("#") and r[0] != "frame"]
 
     # Map frame_id -> list of 4*num_kp value tokens (frame column dropped).
@@ -34,7 +41,9 @@ def convert(input_path, output_path):
         if not r[0].strip():
             continue
         frame_id = int(float(r[0]))
-        vals = r[1:]
+        if frame_id in by_frame:  # one animal: the first row of each frame
+            continue
+        vals = r[1 + id_cols:]
         by_frame[frame_id] = vals
         num_cols = max(num_cols, len(vals))
 

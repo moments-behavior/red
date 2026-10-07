@@ -31,7 +31,7 @@ inline FrameAnnotation frame_from_keypoints(const KeyPoints *kp,
             fa.kp3d[k].x = kp->kp3d[k].position.x;
             fa.kp3d[k].y = kp->kp3d[k].position.y;
             fa.kp3d[k].z = kp->kp3d[k].position.z;
-            // V1 had no Kp3DSource; default to Triangulated if present.
+            // V1 had no 3D origin; default to triangulated if present.
             if (kp->kp3d[k].is_triangulated) {
                 fa.kp3d[k].set_triangulated(kp->kp3d[k].confidence);
             } else {
@@ -45,7 +45,8 @@ inline FrameAnnotation frame_from_keypoints(const KeyPoints *kp,
             for (int k = 0; k < nn; ++k) {
                 fa.cameras[c].keypoints[k].x = kp->kp2d[c][k].position.x;
                 fa.cameras[c].keypoints[k].y = kp->kp2d[c][k].position.y;
-                fa.cameras[c].keypoints[k].labeled = kp->kp2d[c][k].is_labeled;
+                if (kp->kp2d[c][k].is_labeled)
+                    fa.cameras[c].keypoints[k].set_manual();
                 fa.cameras[c].keypoints[k].confidence = kp->kp2d[c][k].confidence;
             }
         }
@@ -63,7 +64,8 @@ inline AnnotationMap migrate_keypoints_map(const std::map<u32, KeyPoints *> &km,
         if (!kp) continue;
         FrameAnnotation fa = frame_from_keypoints(kp, skel, scene);
         fa.frame_number = frame;
-        amap[frame] = std::move(fa);
+        // v1 predates multi-animal: one record per frame, instance 0.
+        amap[frame] = FrameInstances{std::move(fa)};
     }
     return amap;
 }
@@ -83,9 +85,9 @@ inline void refresh_keypoints_in_amap(AnnotationMap &amap,
         if (it == amap.end()) {
             FrameAnnotation fa = frame_from_keypoints(kp, skel, scene);
             fa.frame_number = frame;
-            amap[frame] = std::move(fa);
-        } else {
-            auto &fa = it->second;
+            amap[frame] = FrameInstances{std::move(fa)};
+        } else if (!it->second.empty()) {
+            auto &fa = it->second.front();
             if (kp->kp3d)
                 for (int k = 0; k < nn; ++k) {
                     fa.kp3d[k].x = kp->kp3d[k].position.x;
@@ -103,7 +105,8 @@ inline void refresh_keypoints_in_amap(AnnotationMap &amap,
                     for (int k = 0; k < nn; ++k) {
                         fa.cameras[c].keypoints[k].x = kp->kp2d[c][k].position.x;
                         fa.cameras[c].keypoints[k].y = kp->kp2d[c][k].position.y;
-                        fa.cameras[c].keypoints[k].labeled = kp->kp2d[c][k].is_labeled;
+                        if (kp->kp2d[c][k].is_labeled)
+                    fa.cameras[c].keypoints[k].set_manual();
                         fa.cameras[c].keypoints[k].confidence = kp->kp2d[c][k].confidence;
                     }
                 }
@@ -122,7 +125,11 @@ inline void populate_keypoints_from_amap(std::map<u32, KeyPoints *> &km,
                                           const AnnotationMap &amap,
                                           SkeletonContext *skeleton,
                                           RenderScene *scene) {
-    for (const auto &[frame, fa] : amap) {
+    // The v1 bridge is single-animal: KeyPoints* has one pose per frame, so
+    // only the first instance can be represented.
+    for (const auto &[frame, fis] : amap) {
+        if (fis.empty()) continue;
+        const FrameAnnotation &fa = fis.front();
         if (km.find(frame) == km.end()) {
             KeyPoints *kp = (KeyPoints *)malloc(sizeof(KeyPoints));
             allocate_keypoints(kp, scene, skeleton);
@@ -136,7 +143,7 @@ inline void populate_keypoints_from_amap(std::map<u32, KeyPoints *> &km,
             kp->kp3d[k].position.x = fa.kp3d[k].x;
             kp->kp3d[k].position.y = fa.kp3d[k].y;
             kp->kp3d[k].position.z = fa.kp3d[k].z;
-            kp->kp3d[k].is_triangulated = fa.kp3d[k].triangulated;
+            kp->kp3d[k].is_triangulated = fa.kp3d[k].exist;
             kp->kp3d[k].confidence = fa.kp3d[k].confidence;
         }
         for (int c = 0; c < nc; ++c) {
@@ -144,7 +151,7 @@ inline void populate_keypoints_from_amap(std::map<u32, KeyPoints *> &km,
             for (int k = 0; k < nn; ++k) {
                 kp->kp2d[c][k].position.x = fa.cameras[c].keypoints[k].x;
                 kp->kp2d[c][k].position.y = fa.cameras[c].keypoints[k].y;
-                kp->kp2d[c][k].is_labeled = fa.cameras[c].keypoints[k].labeled;
+                kp->kp2d[c][k].is_labeled = fa.cameras[c].keypoints[k].usable();
                 kp->kp2d[c][k].confidence = fa.cameras[c].keypoints[k].confidence;
             }
         }

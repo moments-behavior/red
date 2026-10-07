@@ -226,6 +226,36 @@ void metal_upload_pixelbuf(int cam_idx, CVPixelBufferRef pb, uint32_t w, uint32_
     }
 }
 
+ImTextureID metal_create_image_texture(const uint8_t *rgba, uint32_t w, uint32_t h) {
+    if (!g_ctx.device || !rgba || w == 0 || h == 0) return (ImTextureID)0;
+    @autoreleasepool {
+        MTLTextureDescriptor *desc =
+            [MTLTextureDescriptor
+                texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                            width:w
+                                           height:h
+                                        mipmapped:NO];
+        desc.usage       = MTLTextureUsageShaderRead;
+        desc.storageMode = MTLStorageModeShared;
+        id<MTLTexture> tex = [g_ctx.device newTextureWithDescriptor:desc];
+        if (!tex) return (ImTextureID)0;
+        [tex replaceRegion:MTLRegionMake2D(0, 0, w, h)
+               mipmapLevel:0
+                 withBytes:rgba
+               bytesPerRow:(NSUInteger)w * 4];
+        // __bridge_retained: the ID keeps the texture alive until released.
+        return (ImTextureID)(intptr_t)(__bridge_retained void *)tex;
+    }
+}
+
+void metal_release_image_texture(ImTextureID tex_id) {
+    if (!tex_id) return;
+    // Hand the reference back to ARC, which releases it at end of scope.
+    id<MTLTexture> tex =
+        (__bridge_transfer id<MTLTexture>)(void *)(intptr_t)tex_id;
+    tex = nil;
+}
+
 ImTextureID metal_get_texture_id(int cam_idx) {
     // ImTextureID is ImU64; store ObjC pointer as integer via bridge+intptr_t cast
     return (ImTextureID)(intptr_t)(__bridge void*)g_ctx.textures[cam_idx];

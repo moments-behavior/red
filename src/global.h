@@ -13,10 +13,13 @@
 #include "sync_plan.h"
 
 extern std::unordered_map<std::string, std::atomic<bool>> window_need_decoding;
+// Entries are initialized on the main thread before decoder threads spawn;
+// worker threads only update existing atomics while media is loaded.
 extern std::unordered_map<std::string, std::atomic<int>> latest_decoded_frame;
 
-// Canonical-timeline desync fix. The plan is built (from Cam*_meta.csv
-// sidecars or an imported sync_plan.json) in load_videos before decoder
+// Canonical-timeline desync fix. The plan is built (from Cam*_meta.csv or lab
+// timestamp CSVs, or an imported sync_plan.json, in the project's
+// timestamps_folder) in load_videos before decoder
 // threads spawn, is immutable while they run, and is reset in unload_media
 // after they join — decoder threads hold pointers into plan.cams.
 struct SyncFixState {

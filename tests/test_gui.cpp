@@ -13,11 +13,15 @@
 #include "deferred_queue.h"
 #include "global.h"
 #include "gui.h"
+#include "gui/gui_keypoints.h"
 #include "annotation_csv.h"
 #include "gui/popup_stack.h"
 #include "gui/toast.h"
 #include "gui/transport_bar.h"
 #include "project_handler.h"
+#include "project.h"
+#include "app_context.h"
+#include "gui/bbox_tool.h"
 #include <cassert>
 #include <cctype>
 #include <cmath>
@@ -601,9 +605,560 @@ static void test_playback_state_defaults() {
     EXPECT_FALSE(ps.slider_text_editing);
 }
 
+
+// ---------------------------------------------------------------------------
+// reprojection(): what a triangulate does to an occluded view
+// ---------------------------------------------------------------------------
+
+// Three pinhole cameras on a baseline, no distortion, 1280x720. Camera 1 sits
+// at the origin looking down +Z; 0 and 2 are shifted a metre either side, so a
+// point in front of the rig is comfortably inside all three images.
+static void build_rig(std::vector<CameraParams> &cams, RenderScene &scene,
+                      std::vector<u32> &w, std::vector<u32> &h,
+                      double shift_cam2 = 1.0) {
+    const double f = 1000.0, cx = 640.0, cy = 360.0;
+    Eigen::Matrix3d K = Eigen::Matrix3d::Identity();
+    K(0, 0) = f; K(1, 1) = f; K(0, 2) = cx; K(1, 2) = cy;
+
+    const double tx[3] = {1.0, 0.0, -shift_cam2};
+    cams.resize(3);
+    for (int i = 0; i < 3; i++) {
+        cams[i].telecentric = false;
+        cams[i].k = K;
+        cams[i].dist_coeffs.setZero();
+        cams[i].r = Eigen::Matrix3d::Identity();
+        cams[i].tvec = Eigen::Vector3d(tx[i], 0.0, 0.0);
+        Eigen::Matrix<double, 3, 4> Rt;
+        Rt.setZero();
+        Rt.block<3, 3>(0, 0) = cams[i].r;
+        Rt.col(3) = cams[i].tvec;
+        cams[i].projection_mat = K * Rt;
+    }
+    w.assign(3, 1280);
+    h.assign(3, 720);
+    scene.num_cams = 3;
+    scene.image_width = w.data();
+    scene.image_height = h.data();
+}
+
+// Place `p` in view v as a manual label, using the same bottom-origin
+// convention the rest of red stores keypoints in.
+static void place_manual(FrameAnnotation &fa, const std::vector<CameraParams> &cams,
+                         const RenderScene &scene, int v, u32 node,
+                         const Eigen::Vector3d &p) {
+    Eigen::Matrix<double, 5, 1> zero; zero.setZero();
+    Eigen::Vector2d px = red_math::projectPointR(p, cams[v].r, cams[v].tvec,
+                                                 cams[v].k, zero);
+    fa.cameras[v].keypoints[node].x = px(0);
+    fa.cameras[v].keypoints[node].y = (double)scene.image_height[v] - px(1);
+    fa.cameras[v].keypoints[node].set_manual();
+}
+
+static void make_frame(FrameAnnotation &fa, u32 nodes) {
+    fa.cameras.resize(3);
+    for (auto &c : fa.cameras) c.keypoints.assign(nodes, Keypoint2D{});
+    fa.kp3d.assign(nodes, Keypoint3D{});
+}
+
+// The question this answers: mark a node occluded in one view, label it in the
+// other two, triangulate -- does the occluded view get a position to draw its
+// cross at, without the occlusion assessment being lost?
+static void test_reprojection_refreshes_occluded_view() {
+    SkeletonContext skel;
+    skel.num_nodes = 1;
+    skel.num_edges = 0;
+
+    std::vector<CameraParams> cams;
+    RenderScene scene{};
+    std::vector<u32> w, h;
+    build_rig(cams, scene, w, h);
+
+    FrameAnnotation fa;
+    make_frame(fa, skel.num_nodes);
+
+    const Eigen::Vector3d P(0.10, 0.05, 5.0);
+    place_manual(fa, cams, scene, 1, 0, P);
+    place_manual(fa, cams, scene, 2, 0, P);
+
+    // View 0: judged hidden, and never placed -- no coordinates at all.
+    fa.cameras[0].keypoints[0].set_manual();
+    fa.cameras[0].keypoints[0].set_occluded();
+    fa.cameras[0].keypoints[0].x = UNLABELED;
+    fa.cameras[0].keypoints[0].y = UNLABELED;
+
+    reprojection(fa, &skel, cams, &scene);
+
+    // Two manual views were enough to solve.
+    EXPECT_TRUE(fa.kp3d[0].exist);
+    EXPECT_TRUE(fa.kp3d[0].is_triangulated());
+    EXPECT_NEAR(fa.kp3d[0].x, P(0), 1e-6);
+    EXPECT_NEAR(fa.kp3d[0].z, P(2), 1e-6);
+
+    const Keypoint2D &occ = fa.cameras[0].keypoints[0];
+    // The assessment stands, and it is still not a point you can use.
+    EXPECT_TRUE(occ.is_occluded());
+    EXPECT_FALSE(occ.usable());       // a position, but not one to act on
+    EXPECT_TRUE(occ.has_pos);         // the solve gave it one to draw at
+    EXPECT_TRUE(occ.is_manual());          // the author of the assessment survives
+    // ...but it now has somewhere to draw the cross, and says where that
+    // position came from.
+    EXPECT_TRUE(occ.x != UNLABELED && occ.y != UNLABELED);
+    EXPECT_TRUE(occ.reprojected);
+    Eigen::Matrix<double, 5, 1> zero; zero.setZero();
+    Eigen::Vector2d expect = red_math::projectPointR(P, cams[0].r, cams[0].tvec,
+                                                     cams[0].k, zero);
+    EXPECT_NEAR(occ.x, expect(0), 1e-4);
+    EXPECT_NEAR(occ.y, (double)scene.image_height[0] - expect(1), 1e-4);
+
+    // The views that were labelled keep their authorship through the refresh.
+    EXPECT_TRUE(fa.cameras[1].keypoints[0].is_manual());
+    EXPECT_TRUE(fa.cameras[1].keypoints[0].has_pos);
+}
+
+// The other half of the same path: if the solve lands outside this camera's
+// image there is nowhere to put the cross, so the position must go rather than
+// sit at a stale spot. Regression for the bug in 6d97e65.
+static void test_reprojection_drops_offscreen_occluded_position() {
+    SkeletonContext skel;
+    skel.num_nodes = 1;
+    skel.num_edges = 0;
+
+    std::vector<CameraParams> cams;
+    RenderScene scene{};
+    std::vector<u32> w, h;
+    build_rig(cams, scene, w, h);
+
+    FrameAnnotation fa;
+    make_frame(fa, skel.num_nodes);
+
+    // First solve: in front of the rig, visible everywhere.
+    const Eigen::Vector3d P1(0.0, 0.0, 5.0);
+    place_manual(fa, cams, scene, 1, 0, P1);
+    place_manual(fa, cams, scene, 2, 0, P1);
+    fa.cameras[0].keypoints[0].set_manual();
+    fa.cameras[0].keypoints[0].set_occluded();
+    reprojection(fa, &skel, cams, &scene);
+    EXPECT_TRUE(fa.cameras[0].keypoints[0].x != UNLABELED);
+
+    // Second solve: far off to the side, still in front of the rig but well
+    // outside camera 0's 1280px image.
+    const Eigen::Vector3d P2(-40.0, 0.0, 5.0);
+    place_manual(fa, cams, scene, 1, 0, P2);
+    place_manual(fa, cams, scene, 2, 0, P2);
+    reprojection(fa, &skel, cams, &scene);
+
+    const Keypoint2D &occ = fa.cameras[0].keypoints[0];
+    EXPECT_TRUE(occ.is_occluded());       // still judged hidden
+    EXPECT_TRUE(occ.is_manual());         // still that judgement's author
+    EXPECT_FALSE(occ.usable());
+    EXPECT_FALSE(occ.has_pos);       // the solve left the frame, so none
+    EXPECT_TRUE(occ.x == UNLABELED); // nothing to draw
+    EXPECT_TRUE(occ.y == UNLABELED);
+    EXPECT_FALSE(occ.reprojected);
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
+
+// A new project is Untitled: setting it up must not touch the disk (it has no
+// folder yet -- creating "" failed with "No such file or directory").
+static void test_setup_untitled_project() {
+    auto skeleton_map = skeleton_get_all();
+    ProjectManager pm;
+    pm.untitled = true;
+    pm.skeleton_name = skeleton_map.begin()->first;
+    pm.camera_names = {"Cam1"};
+    SkeletonContext skeleton;
+    std::string err;
+    EXPECT_TRUE(setup_project(pm, skeleton, skeleton_map, &err));
+    if (!err.empty()) fprintf(stderr, "  setup_project: %s\n", err.c_str());
+    EXPECT_TRUE(pm.project_path.empty());
+    EXPECT_TRUE(pm.keypoints_root_folder.empty());
+}
+
+// Save Project's check: a new folder or an empty one is fine; a name that is
+// already there (folder with files, or a file) is not.
+static void test_untitled_save_problem() {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "red_test_save_problem";
+    fs::remove_all(root);
+    fs::create_directories(root / "empty");
+    fs::create_directories(root / "full");
+    { std::ofstream(root / "full" / "x.txt") << "x"; }
+    { std::ofstream(root / "afile") << "x"; }
+    const std::string r = root.string();
+    EXPECT_TRUE(untitled_save_problem("new", r).empty());
+    EXPECT_TRUE(untitled_save_problem("empty", r).empty());
+    EXPECT_FALSE(untitled_save_problem("full", r).empty());
+    EXPECT_FALSE(untitled_save_problem("afile", r).empty());
+    EXPECT_FALSE(untitled_save_problem("", r).empty());
+    EXPECT_FALSE(untitled_save_problem("a/b", r).empty());
+    fs::remove_all(root);
+}
+
+// ── Bbox tool, driven through real ImGui/ImPlot frames ──
+// Headless: no window or renderer, a mouse fed through io events, and the
+// same calls a camera view makes. Covers what only shows when the input
+// code runs: drawing over an existing box, dragging an edge, and moving a
+// box by its label.
+namespace bbox_ui {
+struct Headless {
+    Headless() {
+        ImGui::CreateContext();
+        ImPlot::CreateContext();
+        ImGuiIO &io = ImGui::GetIO();
+        io.DisplaySize = ImVec2(800, 600);
+        io.DeltaTime = 1.0f / 60.0f;
+        io.IniFilename = nullptr;
+        // Apply each frame's key and mouse events together; trickling
+        // spreads them over frames, which a test scripting one state per
+        // frame does not want.
+        io.ConfigInputTrickleEventQueue = false;
+        unsigned char *px; int w, h;
+        io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+    }
+    ~Headless() {
+        ImPlot::DestroyContext();
+        ImGui::DestroyContext();
+    }
+};
+
+constexpr int kW = 640, kH = 480;
+
+// One frame with the pointer at `mouse` (pixels), the left button and Shift
+// as given; `body` runs inside the plot, which spans the plot coords
+// [0,kW] x [0,kH]. The plot sees the pointer from the frame after it moves
+// there, so a test hovers for two frames before acting.
+template <typename Body>
+void frame(BBoxToolState &st, ImVec2 mouse, bool down, bool shift, Body body,
+           bool right_down = false) {
+    ImGuiIO &io = ImGui::GetIO();
+    io.AddKeyEvent(ImGuiMod_Shift, shift);
+    io.AddKeyEvent(ImGuiKey_LeftShift, shift);
+    io.AddMousePosEvent(mouse.x, mouse.y);
+    io.AddMouseButtonEvent(0, down);
+    io.AddMouseButtonEvent(1, right_down);
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::Begin("view", nullptr, ImGuiWindowFlags_NoDecoration);
+    if (ImPlot::BeginPlot("##cam", ImVec2(-1, -1), ImPlotFlags_NoMenus)) {
+        const ImPlotAxisFlags lock = bbox_blocks_pan(st) ? ImPlotAxisFlags_Lock
+                                                         : ImPlotAxisFlags_None;
+        ImPlot::SetupAxes(nullptr, nullptr, lock, lock);
+        ImPlot::SetupAxisLimits(ImAxis_X1, 0, kW, ImPlotCond_Always);
+        ImPlot::SetupAxisLimits(ImAxis_Y1, 0, kH, ImPlotCond_Always);
+        body();
+        ImPlot::EndPlot();
+    }
+    ImGui::End();
+    ImGui::Render();
+}
+
+// Pixel position of plot point (x, y), read inside a frame.
+ImVec2 px(BBoxToolState &st, double x, double y) {
+    ImVec2 p;
+    frame(st, ImVec2(-1, -1), false, false, [&] { p = ImPlot::PlotToPixels(x, y); });
+    return p;
+}
+
+// A frame with instance 0 holding a box on camera 0, plot x 100..300, y 100..300.
+AnnotationMap one_box() {
+    AnnotationMap amap;
+    auto &fa = get_or_create_frame(amap, 0, 1, 1, 0);
+    auto &e = fa.cameras[0].get_extras();
+    e.bbox_x = 100; e.bbox_y = kH - 300; e.bbox_w = 200; e.bbox_h = 200;
+    e.has_bbox = true;
+    return amap;
+}
+} // namespace bbox_ui
+
+static void test_bbox_ui_draw_over_box() {
+    printf("  test_bbox_ui_draw_over_box...\n");
+    using namespace bbox_ui;
+    Headless ui;
+    BBoxToolState st;
+    LabelInfo info;
+    AnnotationMap amap = one_box();
+    int active = 0;
+    auto input = [&] { bbox_handle_input(st, info, amap, 0, 0, active, 1, 1, kW, kH); };
+    const ImVec2 a = px(st, 150, 250), b = px(st, 250, 150);   // inside the box
+    frame(st, a, false, true, input);    // hover with Shift
+    frame(st, a, false, true, input);
+    frame(st, a, true, true, input);     // press: starts a box
+    EXPECT_TRUE(st.drawing);
+    frame(st, b, true, true, input);     // drag
+    frame(st, b, false, true, input);    // let go: commits
+    EXPECT_FALSE(st.drawing);
+    // Instance 0 already had a box here: the new one is instance 1.
+    EXPECT_TRUE((int)amap[0].size() == 2);
+    if (amap[0].size() == 2) {
+        const auto &e = *amap[0][1].cameras[0].extras;
+        EXPECT_TRUE(amap[0][1].cameras[0].has_bbox());
+        EXPECT_NEAR(e.bbox_x, 150, 2.0);
+        EXPECT_NEAR(e.bbox_w, 100, 2.0);
+        EXPECT_TRUE(active == 1);
+    }
+}
+
+static void test_bbox_ui_drag_edge_and_label() {
+    printf("  test_bbox_ui_drag_edge_and_label...\n");
+    using namespace bbox_ui;
+    Headless ui;
+    BBoxToolState st;
+    LabelInfo info;
+    AnnotationMap amap = one_box();
+    int active = 0;
+    auto input = [&] { bbox_handle_input(st, info, amap, 0, 0, active, 1, 1, kW, kH); };
+    auto &e = amap[0][0].cameras[0].get_extras();
+
+    // Left edge: hover shows it, press and drag moves it to x = 50.
+    const ImVec2 edge = px(st, 100, 200), to = px(st, 50, 200);
+    frame(st, edge, false, false, input);
+    frame(st, edge, false, false, input);
+    EXPECT_TRUE(st.edge_mask == kEdgeL);
+    frame(st, edge, true, false, input);
+    EXPECT_TRUE(st.resizing);
+    frame(st, to, true, false, input);
+    frame(st, to, false, false, input);
+    EXPECT_FALSE(st.resizing);
+    EXPECT_NEAR(e.bbox_x, 50, 2.0);
+    EXPECT_NEAR(e.bbox_w, 250, 2.0);    // the right edge stayed at 300
+
+    // The label (top-left): drag moves the whole box, size kept.
+    const ImPlotPoint lab = box_label_anchor(e.bbox_x, kH - e.bbox_y);
+    const ImVec2 l0 = px(st, lab.x, lab.y), l1 = px(st, lab.x + 100, lab.y - 50);
+    const double w0 = e.bbox_w, h0 = e.bbox_h, x0 = e.bbox_x, y0 = e.bbox_y;
+    frame(st, l0, false, false, input);
+    frame(st, l0, false, false, input);
+    EXPECT_TRUE(st.edge_mask == kEdgeMove);
+    frame(st, l0, true, false, input);
+    frame(st, l1, true, false, input);
+    frame(st, l1, false, false, input);
+    EXPECT_NEAR(e.bbox_x, x0 + 100, 2.0);
+    EXPECT_NEAR(e.bbox_y, y0 + 50, 2.0);   // image y grows downward
+    EXPECT_NEAR(e.bbox_w, w0, 1e-9);
+    EXPECT_NEAR(e.bbox_h, h0, 1e-9);
+}
+
+static void test_bbox_ui_right_click_menu() {
+    printf("  test_bbox_ui_right_click_menu...\n");
+    using namespace bbox_ui;
+    Headless ui;
+    BBoxToolState st;
+    LabelInfo info;
+    AnnotationMap amap = one_box();
+    int active = 0;
+    bool open = false;
+    auto input = [&] {
+        bbox_handle_input(st, info, amap, 0, 0, active, 1, 1, kW, kH);
+        bbox_draw_menu(st, info, amap, 0, 0, active);
+        open = ImGui::IsPopupOpen("##box_menu");
+    };
+    const ImVec2 in = px(st, 200, 200);
+    frame(st, in, false, false, input);
+    frame(st, in, false, false, input);
+    EXPECT_FALSE(open);
+    frame(st, in, false, false, input, /*right*/ true);
+    frame(st, in, false, false, input);
+    EXPECT_TRUE(open);
+    EXPECT_TRUE(st.menu_instance == 0 && st.menu_cam == 0);
+}
+
+// Keypoints coloured by reprojection error: a pinhole camera looking down +z,
+// a 3D point projecting to the principal point, and keypoints placed 0, 3 and
+// 10 px from it -> green, yellow, red; a node without 3D is grey.
+static void test_reprojection_error_colors() {
+    printf("  test_reprojection_error_colors...\n");
+    CameraParams cam;
+    cam.k << 500, 0, 320, 0, 500, 240, 0, 0, 1;
+    const double img_h = 480;
+    FrameAnnotation fa = make_frame(4, 1);
+    // ImPlot coords: y up, so image row 240 is plot y 480 - 240.
+    const double off[] = {0, 3, 10};
+    for (int n = 0; n < 3; ++n) {
+        fa.kp3d[n].x = 0; fa.kp3d[n].y = 0; fa.kp3d[n].z = 10;
+        fa.kp3d[n].set_triangulated();
+        auto &kp = fa.cameras[0].keypoints[n];
+        kp.x = 320 + off[n]; kp.y = img_h - 240; kp.set_manual();
+    }
+    auto &kp3 = fa.cameras[0].keypoints[3];   // placed, but no 3D
+    kp3.x = 100; kp3.y = 100; kp3.set_manual();
+    const auto c = reprojection_error_colors(fa, 0, 4, cam, img_h);
+    EXPECT_TRUE(c.size() == 4);
+    auto is = [](const ImVec4 &a, float r, float g) {
+        return std::fabs(a.x - r) < 0.01f && std::fabs(a.y - g) < 0.01f;
+    };
+    EXPECT_TRUE(is(c[0], 0.25f, 0.9f));   // green
+    EXPECT_TRUE(is(c[1], 1.0f, 0.85f));   // yellow
+    EXPECT_TRUE(is(c[2], 1.0f, 0.25f));   // red
+    EXPECT_TRUE(is(c[3], 0.6f, 0.6f));    // grey
+
+    // After T: a point it moved shows what it measured as it solved, even
+    // though the point now sits on the projection; one it filled in shows
+    // none; placing the point again clears the measurement.
+    auto &moved = fa.cameras[0].keypoints[0];
+    moved.reprojected = true;
+    moved.reproj_err_px = 7.0f;
+    auto &filled = fa.cameras[0].keypoints[1];
+    filled.author = Keypoint2D::Author::Derived;
+    filled.reprojected = true;
+    const auto e = reprojection_errors_px(fa, 0, 4, cam, img_h);
+    EXPECT_NEAR(e[0], 7.0, 1e-6);
+    EXPECT_FALSE(std::isfinite(e[1]));
+    moved.set_manual();
+    EXPECT_FALSE(std::isfinite(moved.reproj_err_px));
+}
+
+static void test_bbox_ui_drag_corner() {
+    printf("  test_bbox_ui_drag_corner...\n");
+    using namespace bbox_ui;
+    Headless ui;
+    BBoxToolState st;
+    LabelInfo info;
+    AnnotationMap amap = one_box();   // plot x 100..300, y 100..300
+    int active = 0;
+    auto input = [&] { bbox_handle_input(st, info, amap, 0, 0, active, 1, 1, kW, kH); };
+    auto &e = amap[0][0].cameras[0].get_extras();
+    // Bottom-right corner (plot y is up: bottom is y = 100).
+    // 7 px in from the corner on both axes: outside a side's 5 px, inside the
+    // corner's 10.
+    ImVec2 c0 = px(st, 300, 100);
+    c0.x -= 7; c0.y -= 7;
+    const ImVec2 c1 = px(st, 350, 60);
+    frame(st, c0, false, false, input);
+    frame(st, c0, false, false, input);
+    EXPECT_TRUE(st.edge_mask == (kEdgeR | kEdgeB));
+    frame(st, c0, true, false, input);
+    frame(st, c1, true, false, input);
+    frame(st, c1, false, false, input);
+    // The edges move with the pointer, keeping where it grabbed them: the
+    // corner ends 7 px off the pointer, as it started.
+    const ImVec2 corner_px = px(st, e.bbox_x + e.bbox_w, kH - e.bbox_y - e.bbox_h);
+    EXPECT_NEAR(corner_px.x, (c1.x + 7), 1.0);                  // right moved
+    EXPECT_NEAR(corner_px.y, (c1.y + 7), 1.0);                  // bottom moved
+    EXPECT_NEAR(e.bbox_x, 100, 1e-6);                           // left unchanged
+    EXPECT_NEAR((kH - e.bbox_y), 300, 1e-6);                    // top unchanged
+}
+
+// The first box on a frame starts it with the nearest labelled frame's
+// instances, as B does.
+static void test_bbox_ui_first_box_copies_instances() {
+    printf("  test_bbox_ui_first_box_copies_instances...\n");
+    using namespace bbox_ui;
+    Headless ui;
+    BBoxToolState st;
+    LabelInfo info;
+    AnnotationMap amap = one_box();                      // frame 0: #0 boxed
+    {
+        get_or_create_frame(amap, 0, 1, 1, 1);
+        auto &e = find_instance(amap[0], 1)->cameras[0].get_extras();
+        e.bbox_x = 400; e.bbox_y = 100; e.bbox_w = 50; e.bbox_h = 50; e.has_bbox = true;
+    }
+    int active = 1;
+    auto input = [&] { bbox_handle_input(st, info, amap, 1, 0, active, 1, 1, kW, kH); };
+    const ImVec2 a = px(st, 150, 250), b = px(st, 250, 150);
+    frame(st, a, false, true, input);
+    frame(st, a, false, true, input);
+    frame(st, a, true, true, input);
+    frame(st, b, true, true, input);
+    frame(st, b, false, true, input);
+    EXPECT_TRUE(amap.count(1) && amap[1].size() == 2);
+    if (amap.count(1) && amap[1].size() == 2) {
+        EXPECT_TRUE(amap[1][1].instance_id == 1 && amap[1][1].cameras[0].has_bbox());
+        EXPECT_FALSE(amap[1][0].cameras[0].has_bbox());
+    }
+
+    // A frame holding only an empty #0 (saved from an earlier visit) counts
+    // as new: the first box tops it up with #1.
+    get_or_create_frame(amap, 2, 1, 1, 0);
+    active = 1;
+    auto input2 = [&] { bbox_handle_input(st, info, amap, 2, 0, active, 1, 1, kW, kH); };
+    frame(st, a, false, true, input2);
+    frame(st, a, false, true, input2);
+    frame(st, a, true, true, input2);
+    frame(st, b, true, true, input2);
+    frame(st, b, false, true, input2);
+    EXPECT_TRUE(amap[2].size() == 2 && find_instance(amap[2], 1) &&
+                find_instance(amap[2], 1)->cameras[0].has_bbox());
+
+    // A frame already labelled with #0 alone (from before #1 existed): a box
+    // there tops it up with #1, keeping #0's box and its place.
+    {
+        auto &e = get_or_create_frame(amap, 3, 1, 1, 0).cameras[0].get_extras();
+        e.bbox_x = 500; e.bbox_y = 10; e.bbox_w = 40; e.bbox_h = 40; e.has_bbox = true;
+    }
+    active = 1;
+    auto input3 = [&] { bbox_handle_input(st, info, amap, 3, 0, active, 1, 1, kW, kH); };
+    frame(st, a, false, true, input3);
+    frame(st, a, false, true, input3);
+    frame(st, a, true, true, input3);
+    frame(st, b, true, true, input3);
+    frame(st, b, false, true, input3);
+    EXPECT_TRUE(amap[3].size() >= 2 && amap[3][0].instance_id == 0 &&
+                amap[3][0].cameras[0].has_bbox() && find_instance(amap[3], 1) &&
+                find_instance(amap[3], 1)->cameras[0].has_bbox());
+}
+
+// The two-handle threshold bar: a drag moves the handle nearer where it began,
+// and the handles cannot cross.
+static void test_reproj_threshold_bar() {
+    printf("  test_reproj_threshold_bar...\n");
+    bbox_ui::Headless ui;
+    float good = 2.0f, bad = 5.0f;
+    ImVec2 bar0, bar1;
+    auto run = [&](ImVec2 mouse, bool down) {
+        ImGuiIO &io = ImGui::GetIO();
+        io.AddMousePosEvent(mouse.x, mouse.y);
+        io.AddMouseButtonEvent(0, down);
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(0, 0));
+        ImGui::SetNextWindowSize(ImVec2(400, 100));
+        ImGui::Begin("w", nullptr, ImGuiWindowFlags_NoDecoration);
+        bar0 = ImGui::GetCursorScreenPos();
+        reproj_threshold_bar("##t", good, bad, 200.0f);
+        bar1 = ImVec2(bar0.x + 200.0f, bar0.y + ImGui::GetFrameHeight());
+        ImGui::End();
+        ImGui::Render();
+    };
+    run(ImVec2(-1, -1), false);
+    const float y = (bar0.y + bar1.y) * 0.5f;
+    auto x_at = [&](float v) { return bar0.x + v / 20.0f * 200.0f; };   // scale 0-20 px
+    // Grab the yellow handle (at 5 px) and drag it to 10 px.
+    run(ImVec2(x_at(5.0f), y), false);
+    run(ImVec2(x_at(5.0f), y), false);
+    run(ImVec2(x_at(5.0f), y), true);
+    run(ImVec2(x_at(10.0f), y), true);
+    run(ImVec2(x_at(10.0f), y), false);
+    EXPECT_NEAR(good, 2.0, 1e-6);
+    EXPECT_NEAR(bad, 10.0, 0.2);
+    // Grab the green handle and try to drag it past yellow: it stops there.
+    run(ImVec2(x_at(2.0f), y), false);
+    run(ImVec2(x_at(2.0f), y), true);
+    run(ImVec2(x_at(15.0f), y), true);
+    run(ImVec2(x_at(15.0f), y), false);
+    EXPECT_TRUE(good <= bad);
+    EXPECT_NEAR(good, bad, 0.2);
+}
+
+// Unsaved-changes detection: the same labels match, an edit does not, and an
+// empty instance is the same as none.
+static void test_annotations_match() {
+    printf("  test_annotations_match...\n");
+    AnnotationMap a;
+    auto &kp = get_or_create_frame(a, 3, 2, 2).cameras[0].keypoints[0];
+    kp.x = 10; kp.y = 20; kp.set_manual();
+    AnnotationMap b = a;
+    EXPECT_TRUE(annotations_match(a, b, 2));
+    b[3].front().cameras[0].keypoints[0].x = 11;          // moved
+    EXPECT_FALSE(annotations_match(a, b, 2));
+    b = a;
+    get_or_create_frame(b, 9, 2, 2);                      // an empty frame
+    EXPECT_TRUE(annotations_match(a, b, 2));
+    set_absent(b[9].front().cameras[1], true);            // a new absent mark
+    EXPECT_FALSE(annotations_match(a, b, 2));
+}
 
 int main() {
     test_current_date_time();
@@ -616,6 +1171,16 @@ int main() {
     test_popup_stack_fifo();
     test_toast_queue_basic();
     test_project_handler_registry();
+    test_setup_untitled_project();
+    test_untitled_save_problem();
+    test_bbox_ui_draw_over_box();
+    test_bbox_ui_drag_edge_and_label();
+    test_bbox_ui_right_click_menu();
+    test_bbox_ui_drag_corner();
+    test_bbox_ui_first_box_copies_instances();
+    test_reprojection_error_colors();
+    test_reproj_threshold_bar();
+    test_annotations_match();
 
     // Transport bar + UI overhaul tests
     test_transport_bar_state_defaults();
@@ -627,6 +1192,10 @@ int main() {
     test_ini_migration_idempotent();
     test_playback_speed_computation();
     test_playback_state_defaults();
+
+    // Reprojection write-back
+    test_reprojection_refreshes_occluded_view();
+    test_reprojection_drops_offscreen_occluded_position();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;

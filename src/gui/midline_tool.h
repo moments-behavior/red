@@ -77,7 +77,8 @@ inline void midline_draw_overlay(MidlineToolState &state, const AnnotationMap &a
     if (cam_idx != state.line_cam_idx) return;
     auto it = amap.find(frame);
     if (it == amap.end()) return;
-    const auto &m = it->second.midline;
+    if (it->second.empty()) return;
+    const auto &m = it->second.front().midline;
     if (m.line_camera_id != cam_idx) return;
     // Show the first endpoint even before the segment is complete.
     bool has_p1 = m.has_line || state.pending_click == 1;
@@ -156,9 +157,9 @@ inline void DrawMidlineToolWindow(MidlineToolState &state, AppContext &ctx) {
                 state.status = "No annotations on this frame";
                 ctx.toasts.push(state.status, Toast::Warning, 3.0f);
             } else {
-                midline_sync_to_frame(state, it->second);
+                midline_sync_to_frame(state, it->second.front());
                 std::string status; double min_sin = 1.0;
-                bool ok = solve_midline_constraint(it->second, &ctx.skeleton,
+                bool ok = solve_midline_constraint(it->second.front(), &ctx.skeleton,
                                                    pm.camera_params, ctx.scene,
                                                    status, min_sin);
                 state.status = status;
@@ -172,7 +173,8 @@ inline void DrawMidlineToolWindow(MidlineToolState &state, AppContext &ctx) {
         if (ImGui::Button("Clear line", ImVec2(-1, 0))) {
             u32 f = (u32)ctx.current_frame_num;
             auto it = ctx.annotations.find(f);
-            if (it != ctx.annotations.end()) it->second.midline = MidlineConstraint{};
+            if (it != ctx.annotations.end() && !it->second.empty())
+                it->second.front().midline = MidlineConstraint{};
             state.pending_click = 0;
             state.status.clear();
         }

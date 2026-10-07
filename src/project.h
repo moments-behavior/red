@@ -15,25 +15,32 @@ struct AnnotationConfig {
     bool enable_keypoints    = true;  // default on (existing behavior)
     bool enable_bboxes       = false;
     bool enable_obbs         = false;
-    std::vector<std::string> class_names = {"animal"};
+    // Box classes (bbox/OBB tools), by number. Saved with the labels
+    // (annotations.json "categories"), read from there on load; older
+    // projects kept them here, and are still read. Empty in a new project:
+    // the first box adds Class_0.
+    LabelInfo label_info;
 };
 
 inline void to_json(nlohmann::json &j, const AnnotationConfig &a) {
     j = nlohmann::json{
         {"enable_keypoints", a.enable_keypoints},
         {"enable_bboxes", a.enable_bboxes},
-        {"enable_obbs", a.enable_obbs},
-        {"class_names", a.class_names}};
+        {"enable_obbs", a.enable_obbs}};
+    // class_names is not written: the box classes are saved with the boxes
+    // (labeled_data/.../annotations.json, "categories").
 }
 inline void from_json(const nlohmann::json &j, AnnotationConfig &a) {
     a.enable_keypoints    = j.value("enable_keypoints", true);
     a.enable_bboxes       = j.value("enable_bboxes", false);
     a.enable_obbs         = j.value("enable_obbs", false);
-    a.class_names         = j.value("class_names", std::vector<std::string>{"animal"});
+    a.label_info.names   = j.value("class_names", std::vector<std::string>{});
+    // {"animal"} was the default every project got, never a choice (classes
+    // could not be renamed): drop it, so it does not read as an animal.
+    if (a.label_info.names == std::vector<std::string>{"animal"}) a.label_info.names.clear();
 }
 
 struct ProjectManager {
-    bool show_project_window = false;
     std::string project_root_path;
     std::string project_path;
     std::string project_name;
@@ -46,6 +53,15 @@ struct ProjectManager {
     std::vector<std::string> camera_names;
     std::string skeleton_name;
     std::string media_folder;
+    // The .redproj this was read from. Not serialised -- a file does not need
+    // to record its own name -- but the recent-projects list needs the path
+    // that was actually opened, not one rebuilt from project_path and
+    // project_name. Those two agree only when the file is named after the
+    // project, and red's own creation path is what makes them agree.
+    std::string source_file;
+    // "video" | "images_per_camera" | "images_flat". Reloading assumed video
+    // unconditionally, so an image project came back empty.
+    std::string media_kind = "video";
     bool telecentric = false; // true if using telecentric DLT calibration
     bool annotation_2d = false; // 2D-only: single/uncalibrated camera(s), no
                                 // calibration / triangulation / 3D view
@@ -53,6 +69,16 @@ struct ProjectManager {
     // changes what a frame index means: with the fix ON, labels/predictions
     // are keyed by canonical trigger slot, OFF by raw mp4 index.
     bool sync_fix_enabled = false;
+    // Where this project's per-camera timestamps are (sync_plan.json,
+    // Cam<name>_meta.csv or cam<N>_timestamps_*.csv). The desync fix and
+    // Frame Drops use only this folder; red never goes looking for them.
+    // Empty: no timestamps, so neither is available.
+    std::string timestamps_folder;
+    // Created but not yet saved: no name, no folder, no .redproj. The first
+    // save (Cmd+S) asks where and what to call it. Runtime only, never
+    // written -- a saved project is by definition not untitled.
+    bool untitled = false;
+
 
     // empty means "auto-discover in the recording folder", the normal case.
 
@@ -141,9 +167,11 @@ inline void to_json(nlohmann::json &j, const ProjectManager &p) {
                        {"camera_names", p.camera_names},
                        {"skeleton_name", p.skeleton_name},
                        {"media_folder", p.media_folder},
+                       {"media_kind", p.media_kind},
                        {"telecentric", p.telecentric},
                        {"annotation_2d", p.annotation_2d},
                        {"sync_fix_enabled", p.sync_fix_enabled},
+                       {"timestamps_folder", p.timestamps_folder},
                        {"annotation_config", p.annotation_config},
                        {"jarvis_models", p.jarvis_models},
                        {"active_jarvis_model", p.active_jarvis_model},
@@ -163,9 +191,11 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
     p.camera_names = j.value("camera_names", std::vector<std::string>{});
     p.skeleton_name = j.value("skeleton_name", std::string{});
     p.media_folder = j.value("media_folder", std::string{});
+    p.media_kind = j.value("media_kind", std::string{"video"});
     p.telecentric = j.value("telecentric", false);
     p.annotation_2d = j.value("annotation_2d", false);
     p.sync_fix_enabled = j.value("sync_fix_enabled", false);
+    p.timestamps_folder = j.value("timestamps_folder", std::string{});
     if (j.contains("annotation_config"))
         p.annotation_config = j["annotation_config"].get<AnnotationConfig>();
     if (j.contains("jarvis_models"))
@@ -237,6 +267,9 @@ inline bool load_project_manager_json(ProjectManager *out,
         nlohmann::json j;
         ifs >> j;
         *out = j.get<ProjectManager>();
+        // Every load path goes through here, so this is the one place that
+        // reliably knows which file it was.
+        out->source_file = file.string();
         if (reg)
             project_handlers_load(*reg, j);
         return true;
@@ -355,7 +388,8 @@ inline bool write_skeleton_json(const SkeletonContext &s,
 inline bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
                    const std::map<std::string, SkeletonPrimitive> &skeleton_map,
                    std::string *err) {
-    if (!ensure_dir_exists(pm.project_path, err))
+    // An Untitled project has no folder until its first save.
+    if (!pm.untitled && !ensure_dir_exists(pm.project_path, err))
         return false;
 
     pm.camera_params.clear();
@@ -430,12 +464,17 @@ inline bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
     // of truth). Covers both the JSON and primitive skeleton paths at once.
     apply_keypoint_colormap(skeleton, g_keypoint_colormap);
 
-    pm.keypoints_root_folder =
-        (std::filesystem::path(pm.project_path) / "labeled_data").string();
-    if (!ensure_dir_exists(pm.keypoints_root_folder, err))
-        return false;
+    // An Untitled project has no folder yet: its labels live in memory until
+    // the first save gives it one (save_untitled_project).
+    if (pm.untitled) {
+        pm.keypoints_root_folder.clear();
+    } else {
+        pm.keypoints_root_folder =
+            (std::filesystem::path(pm.project_path) / "labeled_data").string();
+        if (!ensure_dir_exists(pm.keypoints_root_folder, err))
+            return false;
+    }
 
     pm.plot_keypoints_flag = true;
-    pm.show_project_window = false;
     return true;
 }

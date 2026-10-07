@@ -8,7 +8,10 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cctype>
 #include <filesystem>
+#include <set>
+#include "video_files.h"
 #include <map>
 #include <string>
 #include <thread>
@@ -39,6 +42,136 @@ inline bool enabled() {
 }  // namespace load_timing
 
 // Tear down existing media (decoder threads, demuxers, scene memory)
+// What kind of media a folder holds. A project has to reload its media long
+// after it was created, and "video" was assumed everywhere -- so an image
+// project could be created and then came back as an empty video project.
+enum class MediaKind { Video, ImagesPerCamera, ImagesFlat };
+
+inline const char *media_kind_str(MediaKind k) {
+    switch (k) {
+    case MediaKind::ImagesPerCamera: return "images_per_camera";
+    case MediaKind::ImagesFlat:      return "images_flat";
+    case MediaKind::Video:
+    default:                         return "video";
+    }
+}
+
+inline MediaKind media_kind_from_str(const std::string &s) {
+    if (s == "images_per_camera") return MediaKind::ImagesPerCamera;
+    if (s == "images_flat")       return MediaKind::ImagesFlat;
+    return MediaKind::Video;
+}
+
+// The flat counterpart of scan_per_camera_dirs: <root>/<cam>_<name>.<ext>,
+// which is the shape File > Open Images produces.
+inline bool scan_flat_images(const std::string &root,
+                             std::map<std::string, std::string> &out,
+                             std::string *err = nullptr) {
+    namespace fs = std::filesystem;
+    if (!fs::is_directory(root)) {
+        if (err) *err = "Not a directory: " + root;
+        return false;
+    }
+    for (const auto &f : fs::directory_iterator(root)) {
+        if (!f.is_regular_file()) continue;
+        if (!is_image_ext(f.path().extension().string())) continue;
+        const std::string name = f.path().filename().string();
+        if (name.find('_') == std::string::npos) continue;
+        out[name] = f.path().string();
+    }
+    if (out.empty() && err)
+        *err = "No <camera>_<frame> images directly under " + root;
+    return !out.empty();
+}
+
+// The cameras a folder offers, and how they are laid out. Checked in the order
+// a person would: videos, then a directory per camera, then camera-prefixed
+// files. Returns empty if the folder holds none of those.
+inline std::vector<std::string> discover_media_cameras(const std::string &folder,
+                                                       MediaKind *kind_out) {
+    namespace fs = std::filesystem;
+    std::vector<std::string> cams;
+    MediaKind kind = MediaKind::Video;
+    if (folder.empty() || !fs::is_directory(folder)) {
+        if (kind_out) *kind_out = kind;
+        return cams;
+    }
+
+    for (const auto &e : fs::directory_iterator(folder)) {
+        if (!e.is_regular_file()) continue;
+        if (is_video_ext(e.path().extension().string()))
+            cams.push_back(e.path().stem().string());
+    }
+    if (!cams.empty()) {
+        std::sort(cams.begin(), cams.end());
+        if (kind_out) *kind_out = MediaKind::Video;
+        return cams;
+    }
+
+    // A directory per camera, each holding that camera's frames.
+    for (const auto &d : fs::directory_iterator(folder)) {
+        if (!d.is_directory()) continue;
+        // load_images splits the key on the first underscore to recover the
+        // camera, so a name carrying one cannot round-trip.
+        if (d.path().filename().string().find('_') != std::string::npos) continue;
+        for (const auto &f : fs::directory_iterator(d.path()))
+            if (f.is_regular_file() && is_image_ext(f.path().extension().string())) {
+                cams.push_back(d.path().filename().string());
+                break;
+            }
+    }
+    if (!cams.empty()) {
+        std::sort(cams.begin(), cams.end());
+        if (kind_out) *kind_out = MediaKind::ImagesPerCamera;
+        return cams;
+    }
+
+    // <cam>_<frame>.<ext> all in one folder.
+    std::set<std::string> flat;
+    for (const auto &f : fs::directory_iterator(folder)) {
+        if (!f.is_regular_file()) continue;
+        if (!is_image_ext(f.path().extension().string())) continue;
+        const std::string name = f.path().filename().string();
+        const size_t us = name.find('_');
+        if (us != std::string::npos && us > 0) flat.insert(name.substr(0, us));
+    }
+    cams.assign(flat.begin(), flat.end());
+    if (kind_out)
+        *kind_out = cams.empty() ? MediaKind::Video : MediaKind::ImagesFlat;
+    return cams;
+}
+
+// Build the selected_files map load_images expects from a directory laid out
+// as <root>/<cam>/<name>.<ext> -- which is what a tailcycle-dataset group
+// holds. Keys stay "<cam>_<file>" because that is what load_images parses; the
+// layout flag is what decides how the path is rebuilt when reading.
+inline bool scan_per_camera_dirs(const std::string &root,
+                                 std::map<std::string, std::string> &out,
+                                 std::string *err = nullptr) {
+    namespace fs = std::filesystem;
+    if (!fs::is_directory(root)) {
+        if (err) *err = "Not a directory: " + root;
+        return false;
+    }
+    for (const auto &cam : fs::directory_iterator(root)) {
+        if (!cam.is_directory()) continue;
+        const std::string cam_name = cam.path().filename().string();
+        // A camera name containing '_' would break load_images, which splits
+        // the key on the first underscore to recover it.
+        if (cam_name.find('_') != std::string::npos) {
+            if (err) *err = "Camera directory name contains '_': " + cam_name;
+            return false;
+        }
+        for (const auto &f : fs::directory_iterator(cam.path())) {
+            if (!f.is_regular_file() ||
+                !is_image_ext(f.path().extension().string())) continue;
+            out[cam_name + "_" + f.path().filename().string()] = f.path().string();
+        }
+    }
+    if (out.empty() && err) *err = "No per-camera image directories under " + root;
+    return !out.empty();
+}
+
 // so that load_images or load_videos can be called cleanly.
 inline void
 unload_media(PlaybackState &ps, ProjectManager &pm,
@@ -149,7 +282,7 @@ unload_media(PlaybackState &ps, ProjectManager &pm,
     ps.pause_seeked = false;
     dc_context->decoding_flag = false;
     dc_context->total_num_frame = INT_MAX;
-    dc_context->estimated_num_frames = 0;
+    dc_context->last_frame_index = 0;
 
     // Clear stale per-camera decoded frame counters
     latest_decoded_frame.clear();
@@ -160,7 +293,8 @@ unload_media(PlaybackState &ps, ProjectManager &pm,
     dc_context->sync_fix_active = false;
     dc_context->sync_canonical_len = 0;
 
-    // Reset realtime playback (load_images sets false; load_videos expects true)
+    // Reset realtime playback. Both loaders set it from the user's default
+    // afterwards; true is the neutral value in between.
     ps.realtime_playback = true;
     ps.accumulated_play_time = 0.0;
     ps.last_play_time_start = std::chrono::steady_clock::now();
@@ -174,7 +308,17 @@ load_images(std::map<std::string, std::string> &selected_files,
             DecoderContext *dc_context, int label_buffer_size,
             std::vector<std::thread> &decoder_threads,
             std::vector<bool> &is_view_focused,
-            std::unordered_map<std::string, bool> &window_was_decoding) {
+            std::unordered_map<std::string, bool> &window_was_decoding,
+            ImageLayout layout = ImageLayout::Flat,
+            // Frames per second of the source recording, when it is known --
+            // a tailcycle group declares one. 0 means the source declares
+            // none, and an assumed rate is used for playback instead.
+            float fps = 0.0f,
+            // The user's default playback mode. This used to be forced to
+            // tick mode here, back when video_fps was 1 for images and the
+            // clock-paced speeds were meaningless; now that they work against
+            // an assumed rate there is no reason to override the setting.
+            bool realtime_playback = true) {
 
     std::string file_ext;
     for (const auto &elem : selected_files) {
@@ -201,22 +345,47 @@ load_images(std::map<std::string, std::string> &selected_files,
         }
     }
 
-    auto to_number = [](const std::string &s) { return std::stoi(s); };
+    // Order by the frame number in the name. std::stoi was used directly here,
+    // which threw -- uncaught, so the app died -- on any name that is not
+    // digits end to end: a per-camera folder of "Frame_361.jpg" is exactly
+    // that, and creating a project from one is now a supported thing to do.
+    // Take the last run of digits instead, and fall back to comparing the
+    // names when there is none, so an unnumbered set still loads in a stable
+    // order rather than not at all.
+    auto frame_number = [](const std::string &s) -> long long {
+        size_t end = s.size();
+        while (end > 0 && !std::isdigit((unsigned char)s[end - 1])) --end;
+        if (end == 0) return -1;
+        size_t begin = end;
+        while (begin > 0 && std::isdigit((unsigned char)s[begin - 1])) --begin;
+        try {
+            return std::stoll(s.substr(begin, end - begin));
+        } catch (...) {
+            return -1;   // absurdly long digit run; order it by name instead
+        }
+    };
 
     std::sort(imgs_names.begin(), imgs_names.end(),
               [&](const std::string &a, const std::string &b) {
-                  return to_number(a) < to_number(b);
+                  const long long na = frame_number(a), nb = frame_number(b);
+                  if (na < 0 || nb < 0 || na == nb) return a < b;
+                  return na < nb;
               });
 
     dc_context->seek_interval = 1;
-    dc_context->video_fps = 1;
-    ps.realtime_playback = false;
+    // With no declared rate, assume something playable rather than 1: at 1 fps
+    // every clock-paced speed reads as "not playing" and the whole speed
+    // control had to be disabled. 30 with the 1/2x..1/16x choices spans
+    // 30 down to ~2 fps, and the rate is editable in the transport bar.
+    dc_context->fps_declared = fps > 0.0f;
+    dc_context->video_fps = fps > 0.0f ? fps : 30.0;
+    ps.realtime_playback = realtime_playback;
     scene->num_cams = pm.camera_names.size();
     scene->image_width = (u32 *)malloc(sizeof(u32) * scene->num_cams);
     scene->image_height = (u32 *)malloc(sizeof(u32) * scene->num_cams);
     for (u32 j = 0; j < scene->num_cams; j++) {
-        std::string file_name = pm.media_folder + "/" + pm.camera_names[j] +
-                                "_" + imgs_names[0] + "." + file_ext;
+        std::string file_name = image_frame_path(
+            pm.media_folder, pm.camera_names[j], imgs_names[0], file_ext, layout);
 #if defined(__APPLE__) || defined(_WIN32)
         int w = 0, h = 0, ch = 0;
         stbi_info(file_name.c_str(), &w, &h, &ch);
@@ -229,6 +398,17 @@ load_images(std::map<std::string, std::string> &selected_files,
         scene->image_width[j] = w;
         scene->image_height[j] = h;
 #endif
+        // A frame that will not read leaves w/h at 0, and a 0-sized texture
+        // aborts inside Metal's descriptor validation with nothing pointing at
+        // the cause. Name the file, and stop before the GPU sees it.
+        if (scene->image_width[j] == 0 || scene->image_height[j] == 0) {
+            std::cerr << "[RED] Cannot read frame for camera " << pm.camera_names[j]
+                      << ": " << file_name << "\n";
+            free(scene->image_width);  scene->image_width = nullptr;
+            free(scene->image_height); scene->image_height = nullptr;
+            scene->num_cams = 0;
+            return;
+        }
         if (j < pm.camera_params.size() && pm.camera_params[j].image_width == 0) {
             pm.camera_params[j].image_width = scene->image_width[j];
             pm.camera_params[j].image_height = scene->image_height[j];
@@ -237,31 +417,75 @@ load_images(std::map<std::string, std::string> &selected_files,
     if (imgs_names.size() < (size_t)label_buffer_size) {
         label_buffer_size = imgs_names.size();
     }
+    // image_loader decodes with stb into host memory and copies directly into
+    // each ring slot. Never give it CUDA device pointers when the user has
+    // selected GPU Buffer; image projects must use host-backed slots and do
+    // not need CUDA/GL PBO interop for texture upload either.
+    scene->use_cpu_buffer = true;
+    scene->force_host_upload = true;
+    // Decoder threads share this context. Set the timeline length before they
+    // start; image_loader used to rewrite it from every camera thread, making
+    // the UI oscillate when camera folders had different frame counts.
+    dc_context->set_frame_count((int)imgs_names.size());
+    // Per-camera counts, for the same readout the video path gets. The
+    // timeline itself stays the union of frame names -- that is what the
+    // image loaders decode against -- but a camera folder that is missing
+    // frames was previously papered over by that union without a word.
+    // Counts are exact here: they are files on disk, nothing is inferred.
+    {
+        std::map<std::string, int> per_cam;
+        for (const auto &elem : selected_files) {
+            std::size_t sep = elem.first.find("_");
+            per_cam[elem.first.substr(0, sep)]++;
+        }
+        dc_context->alloc_per_cam((int)pm.camera_names.size());
+        dc_context->per_cam_names = pm.camera_names;
+        dc_context->per_cam_contiguous = false;
+        for (size_t i = 0; i < pm.camera_names.size(); i++) {
+            auto it = per_cam.find(pm.camera_names[i]);
+            dc_context->per_cam_frames[i].store(
+                it == per_cam.end() ? 0 : it->second);
+            dc_context->per_cam_exact[i].store(true);
+        }
+    }
     render_allocate_scene_memory(scene, label_buffer_size);
+    for (const auto &name : pm.camera_names) {
+        auto [it, inserted] = latest_decoded_frame.try_emplace(name);
+        it->second.store(0, std::memory_order_relaxed);
+    }
     for (int i = 0; i < scene->num_cams; i++) {
         decoder_threads.push_back(
             std::thread(&image_loader, dc_context, imgs_names,
                         scene->display_buffer[i], scene->size_of_buffer,
                         &scene->seek_context[i], scene->use_cpu_buffer,
-                        pm.camera_names[i], pm.media_folder, file_ext));
+                        pm.camera_names[i], pm.media_folder, file_ext, layout));
         is_view_focused.push_back(false);
     }
     ps.video_loaded = true;
 }
 
 // Build or import the desync-fix sync plan for the loaded videos into
-// g_sync_fix. Precedence: a cluster_pose sync_plan.json next to the videos,
-// else per-camera timestamp sidecars (Cam<cam>_meta.csv or lab ISO CSVs) in
-// the media folder or its parent. On any inconsistency the plan is left
-// invalid with plan.error set — the feature simply stays unavailable.
+// g_sync_fix, from the project's chosen timestamps folder and nowhere else.
+// Precedence: a cluster_pose sync_plan.json there, else per-camera timestamp
+// sidecars (Cam<cam>_meta.csv or lab ISO CSVs). With no folder chosen there is
+// no plan. On any inconsistency the plan is left invalid with plan.error set
+// -- the feature simply stays unavailable.
+//
+// It used to look in the video's folder and its parent on every load, listing
+// both: for a video in Downloads that was Downloads and the user's home, and
+// on Windows a single odd file name there crashed red.
 inline void
-sync_fix_load_plan(const std::string &media_folder,
+sync_fix_load_plan(const std::string &timestamps_folder,
                    const std::vector<std::string> &cam_names,
                    const std::vector<FFmpegDemuxer *> &demuxers) {
     namespace fs = std::filesystem;
     g_sync_fix = SyncFixState{};
     sync_plan::SyncPlan &plan = g_sync_fix.plan;
-    if (cam_names.empty() || media_folder.empty()) return;
+    if (cam_names.empty()) return;
+    if (timestamps_folder.empty()) {
+        plan.error = "no timestamps folder set for this project";
+        return;
+    }
 
     // Demuxed frame counts, for validating the plan against the actual mp4s
     // (0 = unknown, skipped by the check).
@@ -269,8 +493,9 @@ sync_fix_load_plan(const std::string &media_folder,
     for (size_t i = 0; i < cam_names.size() && i < demuxers.size(); ++i)
         counts[cam_names[i]] = (int)demuxers[i]->GetNumFrames();
 
-    fs::path plan_json = fs::path(media_folder) / "sync_plan.json";
-    if (fs::exists(plan_json)) {
+    fs::path plan_json = fs::path(timestamps_folder) / "sync_plan.json";
+    std::error_code ec;
+    if (fs::exists(plan_json, ec)) {
         plan = sync_plan::load_json(plan_json.string());
         // A loaded camera the plan cannot map would silently desync — the
         // exact failure mode this feature exists to fix. Refuse the plan.
@@ -291,15 +516,9 @@ sync_fix_load_plan(const std::string &media_folder,
         }
         const std::string lab_pattern = "cam{cam}_timestamps_*.csv";
         ct::CameraTimestamps ts =
-            ct::load(media_folder, tokens, lab_pattern, token_counts);
+            ct::load(timestamps_folder, tokens, lab_pattern, token_counts);
         if (ts.format == ct::Format::None) {
-            fs::path parent = fs::path(media_folder).parent_path();
-            if (!parent.empty())
-                ts = ct::load(parent.string(), tokens, lab_pattern,
-                              token_counts);
-        }
-        if (ts.format == ct::Format::None) {
-            plan.error = "no timestamp metadata found";
+            plan.error = "no timestamp files in " + timestamps_folder;
             std::cout << "[sync-fix] unavailable: " << plan.error << std::endl;
             return;
         }
@@ -331,7 +550,13 @@ load_videos(std::map<std::string, std::string> &selected_files,
             std::vector<FFmpegDemuxer *> &demuxers, DecoderContext *dc_context,
             RenderScene *scene, int label_buffer_size,
             std::vector<std::thread> &decoder_threads,
-            std::vector<bool> &is_view_focused) {
+            std::vector<bool> &is_view_focused,
+            // The user's default playback mode, same as load_images. Videos
+            // used to inherit the `true` reset_playback_state leaves behind,
+            // so a default of "Every frame" survived only until the first
+            // project was opened.
+            bool realtime_playback = true) {
+    ps.realtime_playback = realtime_playback;
     // Track which camera names successfully loaded (in order) so that
     // camera_names stays in sync with demuxers after skipping failures.
     std::vector<std::string> loaded_cam_names;
@@ -344,7 +569,7 @@ load_videos(std::map<std::string, std::string> &selected_files,
         for (const auto &cam_string : pm.camera_names) {
             std::map<std::string, std::string> m;
             std::string media_filename =
-                (std::filesystem::path(pm.media_folder) / (cam_string + ".mp4"))
+                std::filesystem::path(camera_video_path(pm.media_folder, cam_string))
                     .string();
             try {
                 FFmpegDemuxer *demuxer =
@@ -371,14 +596,15 @@ load_videos(std::map<std::string, std::string> &selected_files,
             dc_context->seek_interval =
                 (int)demuxers[0]->FindKeyFrameInterval();
             dc_context->video_fps = demuxers[0]->GetFramerate();
+            dc_context->fps_declared = true;
         }
         t_keyframe = load_timing::ms(t_stage);
         pm.camera_names = loaded_cam_names;
     } else {
         for (const auto &elem : selected_files) {
-            std::size_t cam_string_mp4_position = elem.first.find("mp4");
+            // "Cam1.avi" / "Cam1.MP4" -> "Cam1".
             std::string cam_string =
-                elem.first.substr(0, cam_string_mp4_position - 1);
+                std::filesystem::path(elem.first).stem().string();
             std::map<std::string, std::string> m;
             try {
                 FFmpegDemuxer *demuxer =
@@ -405,6 +631,7 @@ load_videos(std::map<std::string, std::string> &selected_files,
             dc_context->seek_interval =
                 (int)demuxers[0]->FindKeyFrameInterval();
             dc_context->video_fps = demuxers[0]->GetFramerate();
+            dc_context->fps_declared = true;
         }
         t_keyframe = load_timing::ms(t_stage);
         pm.camera_names = loaded_cam_names;
@@ -423,6 +650,16 @@ load_videos(std::map<std::string, std::string> &selected_files,
         scene->image_height[j] = demuxers[j]->GetHeight();
         // Back-propagate video dimensions to CameraParams (needed for
         // telecentric DLT cameras where the calibration file has no image size)
+        // A video reporting no dimensions would build a 0-sized texture, which
+        // aborts inside Metal's descriptor validation.
+        if (scene->image_width[j] == 0 || scene->image_height[j] == 0) {
+            std::cerr << "[RED] Camera " << pm.camera_names[j]
+                      << " reports a zero frame size.\n";
+            free(scene->image_width);  scene->image_width = nullptr;
+            free(scene->image_height); scene->image_height = nullptr;
+            scene->num_cams = 0;
+            return;
+        }
         if (j < pm.camera_params.size() && pm.camera_params[j].image_width == 0) {
             pm.camera_params[j].image_width = scene->image_width[j];
             pm.camera_params[j].image_height = scene->image_height[j];
@@ -437,7 +674,32 @@ load_videos(std::map<std::string, std::string> &selected_files,
                       << " — wrong calibration for this crop?" << std::endl;
         }
     }
+    // Ask the hardware decoder whether it can actually take this stream,
+    // before anything is built on the assumption that it can. A GPU that
+    // cannot produces no frames at all and says nothing: the check NvDecoder
+    // already does runs inside a CUVID parser callback, where its exception
+    // cannot travel back out through NVIDIA's C frame.
+    //
+    // The limit is per codec AND per resolution, and the resolution half is
+    // the one that bites. 3DPOP's pigeon videos are MPEG-4 Part 2 at
+    // 3840x2160; an A6000's NVDEC decodes MPEG-4 quite happily but only up to
+    // 2032x2032, so the stream was accepted and then silently dropped. Asking
+    // about the codec alone would have called this supported and changed
+    // nothing.
+    if (!demuxers.empty() && demuxers[0]) {
+        std::string why;
+        // 4:2:0 8-bit is what every path downstream is written for, and what
+        // these files are; a stream that is not will fail its own way.
+        if (!red::hw_can_decode_stream((int)demuxers[0]->GetVideoCodec(),
+                                       /*chroma 4:2:0*/ 1, /*8-bit*/ 0,
+                                       (int)demuxers[0]->GetWidth(),
+                                       (int)demuxers[0]->GetHeight(),
+                                       dc_context->gpu_index, &why))
+            red::decode_backend_force_software(why);
+    }
+
     t_stage = load_timing::Clock::now();
+    scene->force_host_upload = false;
     render_allocate_scene_memory(scene, label_buffer_size);
     t_alloc = load_timing::ms(t_stage);
 
@@ -446,25 +708,66 @@ load_videos(std::map<std::string, std::string> &selected_files,
     // A clean plan is an identity mapping — leave the fix off so playback
     // keeps fast (non-accurate) seeks.
     t_stage = load_timing::Clock::now();
-    sync_fix_load_plan(pm.media_folder, pm.camera_names, demuxers);
+    sync_fix_load_plan(pm.timestamps_folder, pm.camera_names, demuxers);
     t_sync = load_timing::ms(t_stage);
     const sync_plan::SyncPlan &splan = g_sync_fix.plan;
     bool sync_enable = pm.sync_fix_enabled && splan.usable() &&
                        splan.status != sync_plan::Status::Clean;
+    // Record what each camera actually holds, before any decoder thread runs.
+    // PR #28 stopped the threads racing to set the timeline length by taking
+    // camera 0's; this takes the whole set instead, because camera 0 is
+    // whichever file sorted first and is neither the shortest nor the longest
+    // on purpose.
+    dc_context->alloc_per_cam((int)demuxers.size());
+    dc_context->per_cam_names = pm.camera_names;
+    for (size_t i = 0; i < demuxers.size(); i++) {
+        // nb_frames straight from the container (FFmpegDemuxer.cpp). Present
+        // for an ordinary mp4; absent for a fragmented one, which has no
+        // top-level sample count. Only then is the count derived, and it is
+        // flagged so the UI can say the reading is not yet certain -- the
+        // decoder replaces it with the true count on reaching end of stream.
+        const int declared = (int)demuxers[i]->GetNumFrames();
+        if (declared > 0) {
+            dc_context->per_cam_frames[i].store(declared);
+            dc_context->per_cam_exact[i].store(true);
+        } else {
+            dc_context->per_cam_frames[i].store(
+                (int)(demuxers[i]->GetDuration() *
+                      demuxers[i]->GetFramerate()));
+            dc_context->per_cam_exact[i].store(false);
+        }
+    }
+    // Run to the LONGEST camera, which is what the sync plan does for an
+    // uneven recording (canonical_len = max end_slot, sync_plan.h): everything
+    // recorded stays reachable, and a camera that ended early is marked rather
+    // than hidden. The stall this would otherwise cause -- playback is capped
+    // at the slowest decoded camera -- is handled by excluding finished
+    // cameras from that cap (red.cpp) instead of by fabricating duplicate
+    // frames the way the sync path's trailing fill does.
+    //
+    if (!sync_enable && dc_context->per_cam_count > 0) {
+        dc_context->set_frame_count(dc_context->longest_cam_frames());
+        dc_context->total_owned_by_loader = true;
+        dc_context->per_cam_contiguous = true;
+    }
     dc_context->sync_fix_active = sync_enable;
     dc_context->sync_canonical_len = splan.canonical_len;
     if (sync_enable) {
-        dc_context->total_num_frame = (int)splan.canonical_len;
-        dc_context->estimated_num_frames = (int)splan.canonical_len - 1;
+        dc_context->set_frame_count((int)splan.canonical_len);
         // Canonical slots are uniform in trigger time — pace playback by the
         // trigger interval, not the (nominal) container frame rate.
         dc_context->video_fps = 1e9 / (double)splan.delta_ns;
+        dc_context->fps_declared = true;
     }
 
     t_stage = load_timing::Clock::now();
     // Software decode sizes each camera's libavcodec thread pool off this;
     // must be set before the first decoder thread starts.
     red::sw_decode_set_camera_count(scene->num_cams);
+    for (const auto &name : pm.camera_names) {
+        auto [it, inserted] = latest_decoded_frame.try_emplace(name);
+        it->second.store(0, std::memory_order_relaxed);
+    }
     for (int i = 0; i < scene->num_cams; i++) {
         const sync_plan::SyncCam *sync_cam =
             splan.usable() ? splan.cam(pm.camera_names[i]) : nullptr;

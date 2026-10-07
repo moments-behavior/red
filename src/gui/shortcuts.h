@@ -12,32 +12,51 @@
 // keep literal labels in help_content.h.
 #include "IconsForkAwesome.h"
 #include <imgui.h>
+#include <imgui_internal.h>  // InputEventsQueue (drain_queued_arrows)
 #include <string>
 
+// What to call the modifier ImGui reports as Ctrl. On macOS ImGui swaps Cmd
+// and Ctrl (io.ConfigMacOSXBehaviors, on by default under __APPLE__), so
+// io.KeyCtrl and every "Ctrl" binding fire on Command there. A macro so it
+// can join string literals in the help tables.
+#if defined(__APPLE__)
+#define RED_MOD_KEY "Cmd"
+#else
+#define RED_MOD_KEY "Ctrl"
+#endif
+
 namespace keys {
+
+inline const char *mod_name() { return RED_MOD_KEY; }
 
 enum class Sc {
     ToggleHelp,
     PlayPause,
     SeekBack,
     SeekFwd,
+    JumpBack,       // a keyframe interval back (video), ten frames (images)
+    JumpFwd,
     SaveLabels,
-    BufferPrev,
-    BufferNext,
     CreateFrame,
     PlaceKeypoint,
+    MarkOccluded,
+    NextInstance,
+    PrevInstance,
+    NextView,
     ActivePrev,
     ActiveNext,
     ActiveFirst,
     ActiveLast,
     DeleteAllKp,
     Triangulate,
-    PlotMenu,
     PeekRaw,
-    SelectAllKeypoints, // Keypoints window: select every keypoint column (toggle)
-    CopyKeypoints,    // Keypoints window: copy the selected node set
-    PasteKeypoints,   // Keypoints window: paste the copied node set onto this frame
-    DeleteKeypoint,   // Keypoints window: delete (hovered cell / hovered column / selection)
+    SelectAllKeypoints, // keypoints table: select every keypoint column (toggle)
+    CopyKeypoints,    // keypoints table: copy the selected node set
+    PasteKeypoints,   // keypoints table: paste the copied node set onto this frame
+    DeleteKeypoint,   // keypoints table: delete (hovered cell / hovered column / selection)
+    TextLarger,       // UI text size (View > Text Size)
+    TextSmaller,
+    TextReset,
     COUNT  // sentinel: "no single bound key" (help rows that use a literal label)
 };
 
@@ -55,25 +74,31 @@ inline const Binding &binding(Sc s) {
     static const Binding table[] = {
         /* ToggleHelp     */ {ImGuiKey_H, false, false, false, false},
         /* PlayPause      */ {ImGuiKey_Space, false, false, false, false},
-        /* SeekBack       */ {ImGuiKey_LeftArrow, false, false, false, false},
-        /* SeekFwd        */ {ImGuiKey_RightArrow, false, false, false, false},
+        /* SeekBack       */ {ImGuiKey_LeftArrow, false, false, true, false},
+        /* SeekFwd        */ {ImGuiKey_RightArrow, false, false, true, false},
+        /* JumpBack       */ {ImGuiKey_UpArrow, false, false, true, false},
+        /* JumpFwd        */ {ImGuiKey_DownArrow, false, false, true, false},
         /* SaveLabels     */ {ImGuiKey_S, true, false, false, false},
-        /* BufferPrev     */ {ImGuiKey_Comma, false, false, true, false},
-        /* BufferNext     */ {ImGuiKey_Period, false, false, true, false},
         /* CreateFrame    */ {ImGuiKey_B, false, false, false, false},
         /* PlaceKeypoint  */ {ImGuiKey_W, false, false, false, false},
+        /* MarkOccluded   */ {ImGuiKey_M, false, false, false, false},
+        /* NextInstance   */ {ImGuiKey_X, false, false, false, false},
+        /* PrevInstance   */ {ImGuiKey_Z, false, false, false, false},
+        /* NextView       */ {ImGuiKey_Tab, false, false, true, false},
         /* ActivePrev     */ {ImGuiKey_A, false, false, true, false},
         /* ActiveNext     */ {ImGuiKey_D, false, false, true, false},
         /* ActiveFirst    */ {ImGuiKey_Q, false, false, false, false},
         /* ActiveLast     */ {ImGuiKey_E, false, false, false, false},
         /* DeleteAllKp    */ {ImGuiKey_Backspace, false, false, false, false},
         /* Triangulate    */ {ImGuiKey_T, false, false, false, false},
-        /* PlotMenu       */ {ImGuiKey_2, false, false, false, false},
         /* PeekRaw        */ {ImGuiKey_P, false, false, false, true},
         /* SelectAllKeypoints */ {ImGuiKey_A, true, false, false, false},
         /* CopyKeypoints  */ {ImGuiKey_C, true, false, false, false},
         /* PasteKeypoints */ {ImGuiKey_V, true, false, false, false},
         /* DeleteKeypoint */ {ImGuiKey_Delete, false, false, false, false},
+        /* TextLarger     */ {ImGuiKey_Equal, true, false, true, false},
+        /* TextSmaller    */ {ImGuiKey_Minus, true, false, true, false},
+        /* TextReset      */ {ImGuiKey_0, true, false, false, false},
     };
     static_assert(sizeof(table) / sizeof(table[0]) == (size_t)Sc::COUNT,
                   "keys::binding table is out of sync with enum Sc");
@@ -124,6 +149,8 @@ inline std::string key_name(ImGuiKey k) {
         case ImGuiKey_UpArrow:    return ICON_FK_ARROW_UP;
         case ImGuiKey_DownArrow:  return ICON_FK_ARROW_DOWN;
         case ImGuiKey_Comma:      return ",";
+        case ImGuiKey_Equal:      return "=";
+        case ImGuiKey_Minus:      return "-";
         case ImGuiKey_Period:     return ".";
         case ImGuiKey_Space:      return "Space";
         case ImGuiKey_Backspace:  return "Backspace";
@@ -139,11 +166,47 @@ inline std::string key_name(ImGuiKey k) {
 inline std::string display(Sc s) {
     const Binding &b = binding(s);
     std::string out;
-    if (b.ctrl)  out += "Ctrl + ";
+    if (b.ctrl)  out += RED_MOD_KEY " + ";
     if (b.shift) out += "Shift + ";
     out += key_name(b.key);
     if (b.hold)  out += "  (hold)";
     return out;
+}
+
+// The frame move one arrow press makes: Left/Right one frame, Up/Down
+// `jump_frames`. 0 for any other key.
+inline int arrow_delta(ImGuiKey k, int jump_frames) {
+    switch (k) {
+    case ImGuiKey_LeftArrow:  return -1;
+    case ImGuiKey_RightArrow: return 1;
+    case ImGuiKey_UpArrow:    return -jump_frames;
+    case ImGuiKey_DownArrow:  return jump_frames;
+    default:                  return 0;
+    }
+}
+
+// Arrow presses still waiting in ImGui's input queue -- made while a blocking
+// seek held the main thread, and otherwise handed out one per frame from here
+// on -- taken out, so they do not each run a seek. Returns the move they add
+// up to. Only the key-downs are removed; their key-ups stay and change
+// nothing. *only_jumps (optional) is cleared if any was Left/Right. Uses
+// ImGui internals (the queue is not public API).
+inline int drain_queued_arrows(int jump_frames, bool *only_jumps) {
+    ImVector<ImGuiInputEvent> &q = ImGui::GetCurrentContext()->InputEventsQueue;
+    int total = 0;
+    for (int n = 0; n < q.Size;) {
+        const ImGuiInputEvent &e = q[n];
+        const int d = e.Type == ImGuiInputEventType_Key && e.Key.Down
+                          ? arrow_delta(e.Key.Key, jump_frames)
+                          : 0;
+        if (d == 0) { ++n; continue; }
+        total += d;
+        if (only_jumps && e.Key.Key != ImGuiKey_UpArrow &&
+            e.Key.Key != ImGuiKey_DownArrow)
+            *only_jumps = false;
+        q.erase(q.Data + n);
+    }
+    return total;
 }
 
 } // namespace keys

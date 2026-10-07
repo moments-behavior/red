@@ -8,9 +8,12 @@
 
 #include "types.h"
 #include "json.hpp"
+#include <algorithm>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
+#include <array>
 #include <vector>
 #include <filesystem>
 #include <fstream>
@@ -20,76 +23,169 @@
 static constexpr double UNLABELED = 1E7;
 
 // ── Label provenance ──
-enum class LabelSource : int {
-    Manual    = 0,
-    Predicted = 1,
-    Imported  = 2
-};
-
-// ── Per-keypoint 2D annotation ──
 struct Keypoint2D {
     double x = UNLABELED;
-    double y = UNLABELED;
-    bool   labeled    = false;
+    double y = UNLABELED;   // bottom-origin; see above
     float  confidence = 0.0f;
-    LabelSource source = LabelSource::Manual;
+
+    // `exist` is presence: are there coordinates here at all.
+    //
+    // Two independent questions, so two axes:
+    //
+    //   AUTHORSHIP -- who decided this keypoint belongs here. `manual` and
+    //   `predicted` are mutually exclusive; the setters keep them so.
+    //
+    //   COORDINATE ORIGIN -- `reprojected` says the numbers currently stored
+    //   came from this frame's 3D. It is independent of authorship: a point
+    //   YOU placed and then refreshed with T is both manual and reprojected,
+    //   and must still export as `visible`. Collapsing the two is what made
+    //   a T refresh erase the record that you had placed a point at all.
+    // Renamed from `exist` deliberately: it answers only "are there
+    // coordinates here", and the readers that matter want a second question
+    // answered too -- see usable() below. The rename turned all ~70 call
+    // sites into compile errors so each could be re-decided rather than
+    // silently keeping the old meaning.
+    bool has_pos     = false;
+    // Who put this point here. Three states, held exclusive by the type
+    // rather than by the setters remembering to clear each other.
+    //
+    //   Derived    red computed it by reprojecting this frame's 3D
+    //   Manual     a person clicked it in this camera
+    //   Predicted  a model produced it directly in this view
+    //
+    // `Derived` rather than `Unknown`: set_reprojected() is the only way a
+    // point gets a position without an author, so for anything with has_pos
+    // this state says exactly where the numbers came from. It is also the
+    // default, which on a point with no position means nothing at all -- the
+    // same way x and y mean nothing there.
+    enum class Author : unsigned char { Derived, Manual, Predicted };
+    Author author = Author::Derived;
+
+    bool is_manual() const { return author == Author::Manual; }
+    bool is_predicted() const { return author == Author::Predicted; }
+    bool reprojected = false;   // the stored numbers came from the 3D
+    // Reprojection error measured when T last solved this point: pixels from
+    // where it was placed to where the new 3D projects, taken before T moved
+    // it there. NaN when not measured, or when the point was moved since.
+    // Not saved.
+    float  reproj_err_px = std::numeric_limits<float>::quiet_NaN();
+
+    // Independent of the above: an assessment that the point is not visible
+    // here. It has no usable coordinates, so `exist` is false while this is
+    // true -- but it keeps its AUTHOR, because deciding a part is hidden is
+    // itself something a person or a model did. Without that, every occluded
+    // row bucketed as tracked and a single one split a hand-labelled session
+    // in two on export. This is tailcycle's keypoints.pq `missing` status.
+    // Can you see the part in this image? Three answers, so one field with
+    // three values rather than a pair of booleans that could contradict each
+    // other. This is the format's own shape: vis2d is an int8, not a flag.
+    //
+    // Its own axis, separate from authorship and from where the coordinates
+    // came from. Red used to answer it with `manual`, which is why importing
+    // a tracked session marked every machine-made point hand-placed -- the
+    // only way to get `visible` back out -- and then split the session in two
+    // on export.
+    //
+    //   Unknown   nobody has judged this view      -> `projected`
+    //   Observed  someone says the part is visible -> `visible`
+    //   Occluded  someone says it is not           -> `missing`
+    enum class Vis : unsigned char { Unknown, Observed, Occluded };
+    Vis vis = Vis::Unknown;
+
+    bool is_occluded() const { return vis == Vis::Occluded; }
+    bool is_observed() const { return vis == Vis::Observed; }
+
+    // There is a position here, and it is one you can act on: not an
+    // assessment that the part is hidden in this view. Triangulation,
+    // drawing and export all want this rather than has_pos -- an occluded
+    // point keeps its coordinates (the overlay draws the cross from them)
+    // but must not feed a solve or export as visible.
+    bool usable() const { return has_pos && vis != Vis::Occluded; }
+
+    // Occlusion is ONE flag and touches nothing else. It used to clear
+    // has_pos too, which said the point had no coordinates while x/y sat
+    // right there holding them -- and x/y is what the cross is drawn from.
+    // Presence and visibility are separate questions; this answers only the
+    // second. Authorship and coordinate origin are likewise untouched: a
+    // point you placed is still yours after you judge it hidden, and one
+    // whose numbers came from a solve still came from a solve.
+    void set_occluded() { vis = Vis::Occluded; }
+
+    // Back to what it was before. Merging the two booleans cost one thing: an
+    // Observed that M overwrote cannot be read back. It is reconstructible
+    // though -- placing a point IS an observation, so a manual point returns
+    // to Observed and anything else to Unknown, which is what it was.
+    void clear_occluded() {
+        vis = is_manual() ? Vis::Observed : Vis::Unknown;
+    }
+
+    // Authorship. A fresh placement also resets the coordinate origin: these
+    // numbers came from the click, not from a solve.
+    void set_manual() {
+        has_pos = true; author = Author::Manual; vis = Vis::Observed;
+        reprojected = false;
+        // Placed (again): the last T's measurement no longer describes it.
+        reproj_err_px = std::numeric_limits<float>::quiet_NaN();
+    }
+    void set_predicted(float conf = 0.0f) {
+        has_pos = true; author = Author::Predicted; confidence = conf;
+        reprojected = false; vis = Vis::Unknown;
+    }
+
+    // Coordinate origin only -- authorship is deliberately left alone, so a
+    // refreshed hand label stays manual.
+    void set_reprojected() {
+        has_pos = true; reprojected = true;
+        if (vis == Vis::Occluded) vis = Vis::Unknown;
+    }
+    void clear() { *this = Keypoint2D{}; }
 };
+
+inline bool keypoint2d_assessed(const Keypoint2D &kp) {
+    return kp.has_pos || kp.is_occluded();
+}
+
 
 // ── 3D label provenance ──
-// Tracks where a Keypoint3D's values came from. Combined with `reviewed`,
-// this drives the active-learning loop: predictions need review, approved or
-// edited points become training-quality.
-enum class Kp3DSource : int {
-    None         = 0,  // no 3D values yet
-    Triangulated = 1,  // DLT-solved from 2D labels
-    HybridNet    = 2,  // direct 3D prediction by HybridNet
-    Manual       = 3,  // user placed/edited 3D directly in the viewer
-    Imported     = 4,  // external CSV/JSON import
-};
-
-// ── Per-keypoint 3D annotation ──
+// Tracks where a Keypoint3D's values came from.
+// Values 2 (HybridNet) and 3 (Manual) were removed: nothing ever produced
+// them. red has no UI for placing a 3D point directly, and HybridNet output
+// arrives through set_predicted(). The numbering is left alone so the two are
+// not silently reused -- the 3D origin flags are in-memory only and never serialised,
+// but a reader comparing this against older code should see the gap.
 struct Keypoint3D {
     double x = UNLABELED;
     double y = UNLABELED;
     double z = UNLABELED;
-    bool   triangulated = false;             // legacy presence flag, kept in sync with source != None
-    Kp3DSource source = Kp3DSource::None;    // immediate provenance of the values
-    bool   reviewed = false;                 // user signed off (approved or edited)
-    float  confidence   = 0.0f;
+    float  confidence = 0.0f;
 
-    // Setter helpers keep `triangulated` (legacy bool) and `source` in sync.
-    // Migrate new write sites to these; legacy reads of `.triangulated` keep
-    // working unchanged.
+    // Is there a position here. No `usable()` counterpart, and no rename to
+    // has_pos: the 2D split exists because an occluded point keeps its
+    // coordinates while ceasing to be usable, and the 3D layer has no
+    // occlusion to model. Should it ever gain one -- points3d.pq does carry a
+    // `missing` status (§8) that red cannot currently express -- this becomes
+    // has_pos and the pair comes with it.
+    bool exist = false;
+    // Where this 3D point came from. Same shape as Keypoint2D::author, with
+    // the values the 3D layer actually has -- red cannot hand-place a 3D
+    // point, so `Manual` has no counterpart here.
+    //
+    //   Unknown       not established
+    //   Triangulated  DLT-solved from 2D, here or by whoever made the dataset
+    //   Predicted     a model produced it
+    enum class Origin : unsigned char { Unknown, Triangulated, Predicted };
+    Origin origin = Origin::Unknown;
+
+    bool is_triangulated() const { return origin == Origin::Triangulated; }
+    bool is_predicted() const { return origin == Origin::Predicted; }
+
     void set_triangulated(float conf = 1.0f) {
-        source = Kp3DSource::Triangulated;
-        triangulated = true;
-        confidence = conf;
+        exist = true; origin = Origin::Triangulated; confidence = conf;
     }
-    void set_hybridnet(float conf) {
-        source = Kp3DSource::HybridNet;
-        triangulated = true;
-        reviewed = false;  // freshly predicted; awaits user review
-        confidence = conf;
+    void set_predicted(float conf = 1.0f) {
+        exist = true; origin = Origin::Predicted; confidence = conf;
     }
-    void set_manual() {
-        source = Kp3DSource::Manual;
-        triangulated = true;
-        reviewed = true;   // user-placed = implicitly reviewed
-        confidence = 1.0f;
-    }
-    void set_imported(float conf = 1.0f) {
-        source = Kp3DSource::Imported;
-        triangulated = true;
-        reviewed = false;
-        confidence = conf;
-    }
-    void approve() { reviewed = true; }      // accept current values without changing them
-    void clear() {
-        source = Kp3DSource::None;
-        triangulated = false;
-        reviewed = false;
-        confidence = 0.0f;
-    }
+    void clear() { *this = Keypoint3D{}; }
 };
 
 // ── Optional per-camera extras (bbox, OBB, mask) ──
@@ -103,6 +199,11 @@ struct CameraExtras {
     // Oriented bounding box
     double obb_cx = 0, obb_cy = 0, obb_w = 0, obb_h = 0, obb_angle = 0;
     bool has_obb = false;
+
+    // This instance is not in this camera's view on this frame: an explicit
+    // negative ("no box here"), not "not labelled yet". tailcycle's `absent`
+    // instance row; a YOLO image with no line for it. Excludes a box.
+    bool absent = false;
 };
 
 // ── Per-camera annotation for one frame ──
@@ -142,6 +243,7 @@ struct CameraAnnotation {
 
     // Convenience queries
     bool has_bbox() const { return extras && extras->has_bbox; }
+    bool is_absent() const { return extras && extras->absent; }
     bool has_obb()  const { return extras && extras->has_obb;  }
 };
 
@@ -168,7 +270,7 @@ struct MidlineConstraint {
 struct FrameAnnotation {
     u32 frame_number = 0;
     int instance_id  = 0;   // object identity (for multi-animal tracking)
-    int category_id  = 0;   // class index
+    int category_id  = 0;   // class index (one class for now: always 0)
 
     // Optional single-view midline solve constraint for this frame.
     MidlineConstraint midline;
@@ -186,8 +288,63 @@ struct FrameAnnotation {
     std::vector<CameraAnnotation> cameras; // [num_cameras]
 };
 
+// ── Names and colours for the labels ──
+// What the user called things, saved with the boxes in annotations.json:
+//   - box classes, by number (FrameAnnotation::category_id): names, and
+//     colours where one was picked ("categories", "category_colors");
+//   - instances, by id (FrameAnnotation::instance_id): a name and/or a
+//     picked colour ("instances").
+struct InstanceInfo {
+    std::string name;                          // empty: shown as "#<id>"
+    std::array<float, 3> color{-1.f, -1.f, -1.f};   // [0] < 0: not picked
+    bool has_color() const { return color[0] >= 0; }
+    bool empty() const { return name.empty() && !has_color(); }
+};
+struct LabelInfo {
+    std::vector<std::string> names;            // box classes
+    // Parallel to names; may be shorter. {-1,...} or missing = the default
+    // colour for that class number.
+    std::vector<std::array<float, 3>> colors;
+    bool has_color(size_t i) const { return i < colors.size() && colors[i][0] >= 0; }
+
+    std::map<int, InstanceInfo> instances;     // by instance_id
+
+    // "#3", or the name given to instance 3.
+    std::string instance_name(int id) const {
+        auto it = instances.find(id);
+        return it != instances.end() && !it->second.name.empty()
+                   ? it->second.name
+                   : "#" + std::to_string(id);
+    }
+};
+
+// Mark (or unmark) an instance absent in one camera: absent drops its box
+// there; a box drawn there clears absent again (bbox / OBB tools).
+inline void set_absent(CameraAnnotation &cam, bool absent) {
+    if (!absent && !cam.extras) return;
+    auto &e = cam.get_extras();
+    e.absent = absent;
+    if (absent) { e.has_bbox = false; e.has_obb = false; }
+}
+
 // ── The main annotation container ──
-using AnnotationMap = std::map<u32, FrameAnnotation>;
+// ── The main annotation container ──
+//
+// A frame holds one FrameAnnotation per animal. FrameAnnotation was always the
+// per-animal record -- it carries instance_id -- it was simply stored one to a
+// frame, so a second animal had nowhere to go.
+//
+// Order is the instance order; instance_id is the identity that travels with
+// the animal across frames and views, and is what a tailcycle session's
+// `animal_id` maps onto. Index and identity are deliberately not the same
+// thing: an animal that appears late must keep its id.
+using FrameInstances = std::vector<FrameAnnotation>;
+using AnnotationMap = std::map<u32, FrameInstances>;
+
+// INVARIANT: a frame present in the map has at least one instance. Callers use
+// front() for "the animal being labelled"; an empty vector would make that
+// undefined. get_or_create_frame maintains this -- prefer it to amap[frame],
+// which default-constructs an empty list.
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers
@@ -210,31 +367,202 @@ inline FrameAnnotation make_frame(int num_nodes, int num_cameras, u32 frame_numb
     return fa;
 }
 
-// Get-or-create a FrameAnnotation with default sizes
-inline FrameAnnotation &get_or_create_frame(AnnotationMap &amap, u32 frame,
-                                             int num_nodes, int num_cameras) {
-    auto it = amap.find(frame);
-    if (it != amap.end()) return it->second;
-    FrameAnnotation &fa = amap[frame];
-    fa = make_frame(num_nodes, num_cameras, frame);
-    return fa;
+// ── Instance lookup ──
+//
+// Most of red works on one animal at a time, so these take an instance and
+// default to the first. A caller that means "the animal being labelled" passes
+// the active instance; a caller that means "every animal" iterates.
+
+// The instance with this id, or nullptr. Prefer this to indexing: the id is
+// stable across frames, the index is not.
+inline FrameAnnotation *find_instance(FrameInstances &fis, int instance_id) {
+    for (auto &fa : fis)
+        if (fa.instance_id == instance_id) return &fa;
+    return nullptr;
 }
+inline const FrameAnnotation *find_instance(const FrameInstances &fis, int instance_id) {
+    for (const auto &fa : fis)
+        if (fa.instance_id == instance_id) return &fa;
+    return nullptr;
+}
+
+
+
+// The frame's instances, or an empty list if the frame has none.
+inline const FrameInstances &instances_at(const AnnotationMap &amap, u32 frame) {
+    static const FrameInstances empty;
+    const auto it = amap.find(frame);
+    return it == amap.end() ? empty : it->second;
+}
+
+// ── Label comparison ──
+// Used to tell which parts of a tailcycle session were edited, so saving
+// corrections rewrites only those. Both compare the fields an export writes;
+// UI state is ignored, and an animal with nothing there is the same as no
+// animal. A null FrameInstances is a frame that does not exist.
+
+// Whether camera `cam` holds the same 2D keypoints and boxes, for every animal.
+inline bool view_labels_equal(const FrameInstances *a, const FrameInstances *b, size_t cam) {
+    auto view_of = [cam](const FrameInstances *fis, int id) -> const CameraAnnotation * {
+        const FrameAnnotation *fa = fis ? find_instance(*fis, id) : nullptr;
+        return fa && cam < fa->cameras.size() ? &fa->cameras[cam] : nullptr;
+    };
+    auto same = [](const CameraAnnotation *x, const CameraAnnotation *y) {
+        auto box = [](const CameraAnnotation *c) {
+            return c && c->has_bbox() && c->extras->bbox_w > 0 && c->extras->bbox_h > 0;
+        };
+        if (box(x) != box(y)) return false;
+        if ((x && x->is_absent()) != (y && y->is_absent())) return false;
+        if (box(x) && (x->extras->bbox_x != y->extras->bbox_x ||
+                       x->extras->bbox_y != y->extras->bbox_y ||
+                       x->extras->bbox_w != y->extras->bbox_w ||
+                       x->extras->bbox_h != y->extras->bbox_h))
+            return false;
+        const size_t n = std::max(x ? x->keypoints.size() : 0, y ? y->keypoints.size() : 0);
+        for (size_t k = 0; k < n; k++) {
+            const Keypoint2D *p = x && k < x->keypoints.size() ? &x->keypoints[k] : nullptr;
+            const Keypoint2D *q = y && k < y->keypoints.size() ? &y->keypoints[k] : nullptr;
+            const bool pa = p && keypoint2d_assessed(*p), qa = q && keypoint2d_assessed(*q);
+            if (pa != qa) return false;
+            if (pa && (p->has_pos != q->has_pos || p->vis != q->vis || p->author != q->author ||
+                       p->reprojected != q->reprojected || p->x != q->x || p->y != q->y ||
+                       p->confidence != q->confidence))
+                return false;
+        }
+        return true;
+    };
+    for (const FrameInstances *fis : {a, b})
+        if (fis)
+            for (const FrameAnnotation &fa : *fis)
+                if (!same(view_of(a, fa.instance_id), view_of(b, fa.instance_id))) return false;
+    return true;
+}
+
+// Whether every animal has the same 3D points.
+inline bool frame_3d_equal(const FrameInstances *a, const FrameInstances *b) {
+    auto pts = [](const FrameInstances *fis, int id) -> const std::vector<Keypoint3D> * {
+        const FrameAnnotation *fa = fis ? find_instance(*fis, id) : nullptr;
+        return fa ? &fa->kp3d : nullptr;
+    };
+    auto same = [](const std::vector<Keypoint3D> *x, const std::vector<Keypoint3D> *y) {
+        const size_t n = std::max(x ? x->size() : 0, y ? y->size() : 0);
+        for (size_t k = 0; k < n; k++) {
+            const Keypoint3D *p = x && k < x->size() ? &(*x)[k] : nullptr;
+            const Keypoint3D *q = y && k < y->size() ? &(*y)[k] : nullptr;
+            const bool ps = p && p->exist, qs = q && q->exist;
+            if (ps != qs) return false;
+            if (ps && (p->origin != q->origin || p->x != q->x || p->y != q->y ||
+                       p->z != q->z || p->confidence != q->confidence))
+                return false;
+        }
+        return true;
+    };
+    for (const FrameInstances *fis : {a, b})
+        if (fis)
+            for (const FrameAnnotation &fa : *fis)
+                if (!same(pts(a, fa.instance_id), pts(b, fa.instance_id))) return false;
+    return true;
+}
+
+// Get-or-create a FrameAnnotation with default sizes
+// Get-or-create one animal's annotation for a frame. Defaults to instance 0,
+// which is every existing project and every caller that predates multi-animal.
+inline FrameAnnotation &get_or_create_frame(AnnotationMap &amap, u32 frame,
+                                            int num_nodes, int num_cameras,
+                                            int instance_id = 0) {
+    FrameInstances &fis = amap[frame];
+    if (FrameAnnotation *fa = find_instance(fis, instance_id)) return *fa;
+    fis.push_back(make_frame(num_nodes, num_cameras, frame, instance_id));
+    return fis.back();
+}
+
+// The animal being edited, clamped into range. A frame may hold fewer
+// instances than the UI's index -- switching frames must not put the editor
+// out of bounds, and silently editing the wrong animal would be worse than
+// falling back to the first.
+inline FrameAnnotation &instance_or_first(FrameInstances &fis, int index) {
+    if (index > 0 && index < (int)fis.size()) return fis[(size_t)index];
+    return fis.front();
+}
+inline const FrameAnnotation &instance_or_first(const FrameInstances &fis, int index) {
+    if (index > 0 && index < (int)fis.size()) return fis[(size_t)index];
+    return fis.front();
+}
+
+// Whole-frame versions of the per-animal predicates below: true when ANY
+// animal in the frame qualifies.
+inline bool frame_has_any_labels(const FrameAnnotation &fa);
+inline bool frame_has_any_keypoints(const FrameAnnotation &fa);
+inline bool frame_has_any_manual_labels(const FrameAnnotation &fa);
+
+inline bool any_instance_has_labels(const FrameInstances &fis) {
+    for (const auto &fa : fis) if (frame_has_any_labels(fa)) return true;
+    return false;
+}
+inline bool any_instance_has_keypoints(const FrameInstances &fis) {
+    for (const auto &fa : fis) if (frame_has_any_keypoints(fa)) return true;
+    return false;
+}
+inline bool any_instance_has_manual_labels(const FrameInstances &fis) {
+    for (const auto &fa : fis) if (frame_has_any_manual_labels(fa)) return true;
+    return false;
+}
+
+// Every instance labelled anywhere in the project -- the roster a new frame
+// starts with. In the order of the labelled frame with the most instances,
+// then any others seen elsewhere by id. (instance_id, category_id) pairs.
+inline std::vector<std::pair<int, int>> instance_roster(const AnnotationMap &amap) {
+    const FrameInstances *biggest = nullptr;
+    std::map<int, int> seen;   // id -> class
+    for (const auto &[f, fis] : amap) {
+        if (!any_instance_has_labels(fis)) continue;
+        if (!biggest || fis.size() > biggest->size()) biggest = &fis;
+        for (const auto &fa : fis) seen.emplace(fa.instance_id, fa.category_id);
+    }
+    std::vector<std::pair<int, int>> out;
+    if (biggest)
+        for (const auto &fa : *biggest) {
+            out.push_back({fa.instance_id, fa.category_id});
+            seen.erase(fa.instance_id);
+        }
+    for (const auto &[id, cat] : seen) out.push_back({id, cat});
+    return out;
+}
+
+// Give a frame every instance in the project (instance_roster): the ones it
+// lacks are added, empty, after those it has -- whose labels and order are
+// kept, so the one being edited stays at its place. A new frame gets them
+// all; with no labels anywhere, just instance 0. Labelling five animals then
+// moving on keeps five, even past a frame where one was out of view, and a
+// frame labelled before an animal joined gets it too.
+inline FrameInstances &create_frame_instances(AnnotationMap &amap, u32 frame,
+                                              int num_nodes, int num_cameras) {
+    std::vector<std::pair<int, int>> ids = instance_roster(amap);
+    if (ids.empty()) ids.push_back({0, 0});
+    FrameInstances &fis = amap[frame];
+    for (const auto &[id, cat] : ids)
+        if (!find_instance(fis, id))
+            fis.push_back(make_frame(num_nodes, num_cameras, frame, id, cat));
+    return fis;
+}
+
 
 // Check if the frame has any annotation data (keypoints or bboxes)
 inline bool frame_has_any_labels(const FrameAnnotation &fa) {
     for (const auto &cam : fa.cameras) {
         for (const auto &kp : cam.keypoints)
-            if (kp.labeled) return true;
-        if (cam.has_bbox() || cam.has_obb()) return true;
+            if (keypoint2d_assessed(kp)) return true;
+        if (cam.has_bbox() || cam.has_obb() || cam.is_absent()) return true;
     }
     return false;
 }
 
-// Check if any keypoint in the frame is labeled (any camera)
+// Check if any keypoint in the frame is assessed (placed or explicitly
+// occluded) in any camera.
 inline bool frame_has_any_keypoints(const FrameAnnotation &fa) {
     for (const auto &cam : fa.cameras)
         for (const auto &kp : cam.keypoints)
-            if (kp.labeled) return true;
+            if (keypoint2d_assessed(kp)) return true;
     return false;
 }
 
@@ -245,36 +573,116 @@ inline bool frame_has_any_keypoints(const FrameAnnotation &fa) {
 // every keypoint by node position and would silently corrupt this data.
 inline bool frame_has_any_manual_labels(const FrameAnnotation &fa) {
     if (fa.needs_improvement) return true;
-    for (const auto &kp3 : fa.kp3d)
-        if (kp3.source == Kp3DSource::Manual) return true;
+    // No 3D check: red has no way to hand-place a 3D point, so any frame with
+    // hand-made data is caught by the 2D pass below or by needs_improvement.
     for (const auto &cam : fa.cameras)
         for (const auto &kp : cam.keypoints)
-            if (kp.labeled && kp.source == LabelSource::Manual) return true;
+            // Same split bucket_2d makes. An occlusion is hand-made unless
+            // a model claimed it, so it is `!predicted` here rather than
+            // `manual` -- marking a never-placed node hidden sets no author
+            // at all, and that frame is still your work.
+            if ((kp.is_occluded() && !kp.is_predicted()) ||
+                (kp.usable() && kp.is_manual())) return true;
+    // Marking an instance absent is hand-made too.
+    for (const auto &cam : fa.cameras)
+        if (cam.is_absent()) return true;
     return false;
 }
 
 // Whole-project version of frame_has_any_manual_labels.
 inline bool project_has_any_manual_labels(const AnnotationMap &amap) {
-    for (const auto &[frame, fa] : amap)
-        if (frame_has_any_manual_labels(fa)) return true;
+    for (const auto &[frame, fis] : amap)
+        if (any_instance_has_manual_labels(fis)) return true;
     return false;
 }
 
-// Check if all keypoints on all cameras are labeled
+// Check if all keypoints on all cameras are assessed (visible or explicitly
+// occluded).
 inline bool frame_is_complete(const FrameAnnotation &fa) {
     if (fa.cameras.empty()) return false;
     for (const auto &cam : fa.cameras)
         for (const auto &kp : cam.keypoints)
-            if (!kp.labeled) return false;
+            if (!keypoint2d_assessed(kp)) return false;
     return true;
 }
 
-// Check if all 3D keypoints are triangulated
+// Check if all keypoints that are visible in at least one camera are
+// triangulated. A point assessed as missing in every camera has no 3D point to
+// triangulate and therefore does not make a frame incomplete.
 inline bool frame_is_fully_triangulated(const FrameAnnotation &fa, int num_nodes) {
-    for (int k = 0; k < num_nodes; ++k)
-        if (k >= (int)fa.kp3d.size() || !fa.kp3d[k].triangulated)
+    for (int k = 0; k < num_nodes; ++k) {
+        bool visible = false;
+        for (const auto &cam : fa.cameras)
+            if (k < (int)cam.keypoints.size() && cam.keypoints[k].usable()) {
+                visible = true;
+                break;
+            }
+        if (visible && (k >= (int)fa.kp3d.size() || !fa.kp3d[k].exist))
             return false;
+    }
     return true;
+}
+
+// How far along a frame's keypoint labelling is.
+//
+// Shared by the Labeling Tool's timeline and the Frame Buffer list, which used
+// to classify independently and disagree: the Frame Buffer lumped
+// Triangulated and Untriangulated into one "partial", so the same frame read
+// as two different states depending on which panel you looked at.
+//
+// is_2d / has_skeleton / num_cams are passed rather than a ProjectManager so
+// this stays where the predicates it builds on already live.
+enum class KpProgress {
+    None = 0,        // no keypoints on this frame at all
+    Untriangulated,  // some placed keypoint has no 3D yet
+    Triangulated,    // every placed keypoint is triangulated, not all placed
+    // Every keypoint placed in EVERY camera, and triangulated.
+    //
+    // Read it as "nothing is missing from any view", not as "this frame is
+    // done": a keypoint the animal's own body hides from one camera can never
+    // be placed there, so a frame that is finished as far as anyone can take
+    // it still sits in Triangulated below. The legend's tooltip says so.
+    Complete,
+};
+
+inline KpProgress frame_kp_progress(const FrameAnnotation &fa, int num_nodes,
+                                    int num_cams, bool is_2d,
+                                    bool has_skeleton) {
+    if (!frame_has_any_keypoints(fa)) return KpProgress::None;
+    if (!has_skeleton) return KpProgress::Untriangulated;
+    if (is_2d)
+        return frame_is_complete(fa) ? KpProgress::Complete
+                                     : KpProgress::Untriangulated;
+    if (num_cams > 1 && frame_is_complete(fa) &&
+        frame_is_fully_triangulated(fa, num_nodes))
+        return KpProgress::Complete;
+    // Triangulated iff every placed node (labeled in >=1 camera) is
+    // triangulated. Triangulated implies placed, so this means the placed and
+    // triangulated sets coincide.
+    int placed = 0, placed_untriangulated = 0;
+    for (int n = 0; n < num_nodes; ++n) {
+        bool node_placed = false;
+        for (const auto &cam : fa.cameras)
+            if (n < (int)cam.keypoints.size() &&
+                keypoint2d_assessed(cam.keypoints[n])) {
+                node_placed = true;
+                break;
+            }
+        bool node_tri = n < (int)fa.kp3d.size() && fa.kp3d[n].exist;
+        bool node_visible = false;
+        for (const auto &cam : fa.cameras)
+            if (n < (int)cam.keypoints.size() && cam.keypoints[n].usable()) {
+                node_visible = true;
+                break;
+            }
+        if (node_placed) {
+            ++placed;
+            // A node missing in every camera has no 3D observation to solve.
+            if (node_visible && !node_tri) ++placed_untriangulated;
+        }
+    }
+    if (placed > 0 && placed_untriangulated == 0) return KpProgress::Triangulated;
+    return KpProgress::Untriangulated;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -290,12 +698,13 @@ inline nlohmann::json annotations_to_json(const AnnotationMap &amap) {
     root["version"] = 2;
     nlohmann::json frames_arr = nlohmann::json::array();
 
-    for (const auto &[fnum, fa] : amap) {
+    for (const auto &[fnum, fis] : amap)
+      for (const auto &fa : fis) {
         // Serialize frames that carry extended (extras) data OR a needs-fix flag
         // OR a single-view midline constraint.
         bool has_extended = fa.needs_improvement || fa.midline.has_line;
         for (const auto &cam : fa.cameras) {
-            if (cam.has_bbox() || cam.has_obb()) {
+            if (cam.has_bbox() || cam.has_obb() || cam.is_absent()) {
                 has_extended = true;
                 break;
             }
@@ -334,6 +743,7 @@ inline nlohmann::json annotations_to_json(const AnnotationMap &amap) {
             if (ext.has_obb) {
                 jc["obb"] = {ext.obb_cx, ext.obb_cy, ext.obb_w, ext.obb_h, ext.obb_angle};
             }
+            if (ext.absent) jc["absent"] = true;
 
             if (jc.size() > 1) // more than just "cam"
                 cams.push_back(jc);
@@ -357,11 +767,13 @@ inline void annotations_from_json(const nlohmann::json &root, AnnotationMap &ama
         auto it = amap.find(fnum);
         if (it == amap.end()) continue; // only augment existing frames
 
-        auto &fa = it->second;
-
-        // Read instance/category IDs if present
-        if (jf.contains("instance_id"))
-            fa.instance_id = jf["instance_id"].get<int>();
+        // Match the instance this record belongs to. A v2 file written before
+        // multi-animal has one record per frame with instance_id 0, which is
+        // also what the CSV loader created, so it lands on the right one.
+        const int inst = jf.contains("instance_id") ? jf["instance_id"].get<int>() : 0;
+        FrameAnnotation *fap = find_instance(it->second, inst);
+        if (!fap) continue;
+        auto &fa = *fap;
         if (jf.contains("category_id"))
             fa.category_id = jf["category_id"].get<int>();
         if (jf.contains("needs_improvement"))
@@ -397,14 +809,48 @@ inline void annotations_from_json(const nlohmann::json &root, AnnotationMap &ama
                 ext.obb_w = o[2]; ext.obb_h = o[3]; ext.obb_angle = o[4];
                 ext.has_obb = true;
             }
+            if (jc.value("absent", false)) {
+                ext.absent = true;
+                ext.has_bbox = false;   // absent excludes a box
+            }
         }
     }
 }
 
 // Save extended annotations to a JSON file alongside keypoint CSVs
-inline bool save_annotations_json(const AnnotationMap &amap, const std::string &folder) {
+inline bool save_annotations_json(const AnnotationMap &amap, const std::string &folder,
+                                  const LabelInfo *classes = nullptr) {
     auto j = annotations_to_json(amap);
-    if (j["frames"].empty()) return true; // nothing to save
+    // The box classes, by number: what each record's category_id means. Kept
+    // with the boxes so the labels say what they are on their own.
+    const bool have_classes = classes && !classes->names.empty();
+    if (have_classes) {
+        j["categories"] = classes->names;
+        bool any_color = false;
+        for (size_t i = 0; i < classes->names.size(); ++i)
+            any_color = any_color || classes->has_color(i);
+        if (any_color) {
+            nlohmann::json cols = nlohmann::json::array();
+            for (size_t i = 0; i < classes->names.size(); ++i)
+                cols.push_back(classes->has_color(i)
+                                   ? nlohmann::json(classes->colors[i])
+                                   : nlohmann::json(nullptr));
+            j["category_colors"] = cols;   // [r,g,b] in 0..1, or null
+        }
+    }
+    // Instance names / colours, by id.
+    nlohmann::json insts = nlohmann::json::array();
+    if (classes)
+        for (const auto &[id, info] : classes->instances) {
+            if (info.empty()) continue;
+            nlohmann::json ji = {{"id", id}};
+            if (!info.name.empty()) ji["name"] = info.name;
+            if (info.has_color()) ji["color"] = info.color;
+            insts.push_back(ji);
+        }
+    if (!insts.empty()) j["instances"] = insts;
+    if (j["frames"].empty() && !have_classes && insts.empty())
+        return true; // nothing to save
     std::ofstream f(folder + "/annotations.json");
     if (!f) return false;
     f << j.dump(2);
@@ -412,7 +858,10 @@ inline bool save_annotations_json(const AnnotationMap &amap, const std::string &
 }
 
 // Load extended annotations from JSON (call after loading keypoint CSVs)
-inline bool load_annotations_json(AnnotationMap &amap, const std::string &folder) {
+// classes, if given, gets the file's box classes -- left alone when the
+// file has none (labels from before they were kept here).
+inline bool load_annotations_json(AnnotationMap &amap, const std::string &folder,
+                                  LabelInfo *classes = nullptr) {
     std::string path = folder + "/annotations.json";
     if (!std::filesystem::exists(path)) return true; // no extended data, ok
     try {
@@ -420,6 +869,30 @@ inline bool load_annotations_json(AnnotationMap &amap, const std::string &folder
         nlohmann::json j;
         f >> j;
         annotations_from_json(j, amap);
+        if (classes && j.contains("categories") && j["categories"].is_array()) {
+            classes->names = j["categories"].get<std::vector<std::string>>();
+            classes->colors.clear();
+            if (j.contains("category_colors") && j["category_colors"].is_array())
+                for (const auto &c : j["category_colors"])
+                    classes->colors.push_back(
+                        c.is_array() && c.size() == 3
+                            ? std::array<float, 3>{c[0].get<float>(), c[1].get<float>(),
+                                                   c[2].get<float>()}
+                            : std::array<float, 3>{-1.f, -1.f, -1.f});
+        }
+        if (classes && j.contains("instances") && j["instances"].is_array()) {
+            classes->instances.clear();
+            for (const auto &ji : j["instances"]) {
+                if (!ji.contains("id")) continue;
+                InstanceInfo info;
+                info.name = ji.value("name", std::string{});
+                if (ji.contains("color") && ji["color"].is_array() &&
+                    ji["color"].size() == 3)
+                    info.color = {ji["color"][0].get<float>(), ji["color"][1].get<float>(),
+                                  ji["color"][2].get<float>()};
+                classes->instances[ji["id"].get<int>()] = info;
+            }
+        }
         return true;
     } catch (...) {
         return false;

@@ -114,52 +114,15 @@ bool ensure_dir_exists(std::string path_string, std::string *err) {
     return true;
 }
 
-void prepare_application_folders(std::string &red_data_dir,
+void prepare_application_folders(std::string &default_dir,
                                  std::string &media_dir) {
-
-    std::string home_dir = get_home_directory();
-
-    // check for config.json
-    std::filesystem::path config_path =
-        std::filesystem::path(home_dir) / ".config/red/config.json";
-    if (std::filesystem::exists(config_path)) {
-        try {
-            std::ifstream f(config_path);
-            nlohmann::json j;
-            f >> j;
-
-            if (j.contains("media_folder") && j["media_folder"].is_string()) {
-                media_dir = j["media_folder"].get<std::string>();
-            }
-
-            if (j.contains("project_folder") &&
-                j["project_folder"].is_string()) {
-                red_data_dir = j["project_folder"].get<std::string>();
-            }
-        } catch (const std::exception &e) {
-            std::cerr << "Failed to read/parse config.json: " << e.what()
-                      << std::endl;
-        }
-    }
-
-    if (red_data_dir.empty()) {
-        red_data_dir = home_dir + "/red_data";
-    }
-    std::vector<std::string> app_folders = {"yolo_model", "skeleton"};
-    // create required folders
-    for (const auto &folder : app_folders) {
-        std::filesystem::path path =
-            std::filesystem::path(red_data_dir) / folder;
-        if (!std::filesystem::exists(path)) {
-            if (std::filesystem::create_directories(path)) {
-                std::cout << "Created " << folder << " folder..." << std::endl;
-            }
-        }
-    }
-
-    if (media_dir.empty()) {
-        media_dir = red_data_dir;
-    }
+    // Where file dialogs start when nothing better is known: the home folder.
+    // The folders the user last used, and the Settings defaults, come first
+    // (default_project_root, media_browse_dir). A ~/.config/red/config.json
+    // with project_folder / media_folder used to feed these too; Settings
+    // replaced it, and it is no longer read.
+    default_dir = get_home_directory();
+    media_dir = default_dir;
 }
 
 void seek_all_cameras(RenderScene *scene, int frame_number, double video_fps,
@@ -183,7 +146,8 @@ void seek_all_cameras(RenderScene *scene, int frame_number, double video_fps,
         scene->seek_context[i].seek_done = false;
     }
 
-    // Update playback state
+    // Update playback state. Any arrow seek still waiting is superseded.
+    state.pending_seek = -1;
     state.to_display_frame_number = scene->seek_context[0].seek_frame;
     state.pause_selected = 0;
     state.read_head = 0;

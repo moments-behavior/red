@@ -1,5 +1,6 @@
 #pragma once
 #include "imgui.h"
+#include <algorithm>
 #include <chrono>
 #include <string>
 #include <vector>
@@ -70,7 +71,13 @@ inline void drawToasts(ToastQueue &queue) {
         }
 
         // Calculate text size to position window
-        ImVec2 text_size = ImGui::CalcTextSize(t.message.c_str());
+        // Capped and wrapped. Sizing to the text with no limit meant a long
+        // message -- the skipped-cameras warning, an import error, a status
+        // line -- made a toast wider than the viewport, and its right-aligned
+        // x then went negative, i.e. off the left of the screen.
+        const float max_text_w = std::min(520.0f, vp->WorkSize.x * 0.6f);
+        ImVec2 text_size =
+            ImGui::CalcTextSize(t.message.c_str(), nullptr, false, max_text_w);
         float win_w = text_size.x + 24.0f;
         float win_h = text_size.y + 16.0f;
 
@@ -95,7 +102,9 @@ inline void drawToasts(ToastQueue &queue) {
         if (ImGui::Begin(id, nullptr, flags)) {
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   ImVec4(1.0f, 1.0f, 1.0f, alpha));
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + max_text_w);
             ImGui::TextUnformatted(t.message.c_str());
+            ImGui::PopTextWrapPos();
             ImGui::PopStyleColor();
         }
         ImGui::End();

@@ -1,5 +1,10 @@
 #ifndef RED_DECODER
 #define RED_DECODER
+#include <algorithm>
+#include <memory>
+#include <climits>
+#include <string>
+#include <vector>
 #include "red_build_config.h"
 #include "ColorSpace.h"
 #include "FFmpegDemuxer.h"
@@ -56,11 +61,29 @@ struct PictureBuffer {
 struct DecoderContext {
     std::atomic<bool> decoding_flag;
     std::atomic<bool> stop_flag;
+    // The timeline: frames 0 .. last_frame_index. Once the length is known,
+    // total_num_frame is the count and last_frame_index = total_num_frame - 1;
+    // set both with set_frame_count() so they cannot drift apart. While it is
+    // not known, total_num_frame is INT_MAX and last_frame_index holds the
+    // loader's estimate (duration x fps - 1), which is what the slider shows.
     int total_num_frame;
-    int estimated_num_frames;
-    int gpu_index;
+    int last_frame_index;
+    // Which CUDA device to decode on. Never assigned anywhere -- it is 0
+    // because DecoderContext is value-initialised -- so red is single-GPU by
+    // accident rather than by decision. Stated here so the NVDEC capability
+    // query can ask the same device red will decode on rather than
+    // independently assuming zero.
+    int gpu_index = 0;
     int seek_interval;
+    // Frames per second. Two different things have to be told apart here: what
+    // the recording was shot at, and how fast to play it back. A video knows
+    // the first; a folder of images does not, and 3dzef's groups.pq leaves fps
+    // null. `fps_declared` is false in that case and video_fps holds an assumed
+    // playback rate instead -- so the speed control still works, and the
+    // "Recorded FR" readout can say it does not know rather than reporting the
+    // placeholder as fact.
     double video_fps;
+    bool fps_declared = true;
     // Canonical-timeline desync fix (sync_plan.h). When active, decoders emit
     // canonical trigger slots instead of mp4 frame indices: frame_number,
     // seek_frame, latest_decoded_frame and total/estimated counts are all in
@@ -70,6 +93,137 @@ struct DecoderContext {
     // a seek), so a decoder never mixes modes within one seek epoch.
     std::atomic<bool> sync_fix_active;
     int64_t sync_canonical_len;
+
+    // --- Per-camera lengths -------------------------------------------
+    // Each camera's own frame count. Cameras of unequal length are a real
+    // recording, not a fault, but the timeline is a single axis and has to
+    // end somewhere, so the individual counts have to be kept rather than
+    // collapsed at load.
+    //
+    // One slot per camera, written only by that camera's decoder thread and
+    // read by the UI, which is why these are atomics rather than a plain
+    // vector: the shared-total write they replace was the race that made
+    // playback stop at the shortest camera's end (and, after a seek, at
+    // whatever partial count it had reached).
+    //
+    // `exact` distinguishes a count the container declared from one derived
+    // as duration x framerate. A derived count can be off by a frame from
+    // rounding, so two identical cameras can look uneven; it is replaced by
+    // the true count when that camera decodes through to its end, at which
+    // point exact becomes true and the reading settles.
+    std::unique_ptr<std::atomic<int>[]> per_cam_frames;
+    std::unique_ptr<std::atomic<bool>[]> per_cam_exact;
+    int per_cam_count = 0;
+
+    // Written once by the loader before any decoder thread starts, read-only
+    // afterwards, so a decoder can find its own slot without locking. Decoders
+    // are handed a camera name rather than an index.
+    std::vector<std::string> per_cam_names;
+
+    int cam_slot(const std::string &name) const {
+        for (size_t i = 0; i < per_cam_names.size(); i++)
+            if (per_cam_names[i] == name) return (int)i;
+        return -1;
+    }
+
+    // A camera reached the end of its own stream. Each thread writes only its
+    // own slot, so unlike the shared total_num_frame write this replaces,
+    // nothing races.
+    //
+    // Only ever replaces an ESTIMATE. The caller's count is nFrame +
+    // nFrameReturned, and nFrame is a POSITION -- a seek sets it to the
+    // requested target (sw_decoder.cpp) whether or not this camera can reach
+    // it. Seek a 240-frame camera to 500 and it lands on its last real frame
+    // by the EOF guard, but nFrame still says 500, so the count offered here
+    // is fiction. A container that declared nb_frames already knows better
+    // than anything derived this way, so it wins and this is ignored.
+    //
+    // That leaves the fragmented-mp4 case, where nothing was declared: a seek
+    // past the end BEFORE the first natural end of stream can still record a
+    // length that is too long. It takes a deliberate seek past the end of a
+    // file that does not declare its own length, and the reading is marked
+    // uncertain until then either way.
+    void set_frame_count(int count) {
+        total_num_frame = count;
+        last_frame_index = count - 1;
+    }
+
+    void refine_cam_length(const std::string &name, int frames) {
+        const int i = cam_slot(name);
+        if (i < 0 || frames <= 0) return;
+        if (per_cam_exact[i].load()) return;
+        per_cam_frames[i].store(frames);
+        per_cam_exact[i].store(true);
+    }
+
+    void alloc_per_cam(int n) {
+        per_cam_frames = std::make_unique<std::atomic<int>[]>(n > 0 ? n : 1);
+        per_cam_exact = std::make_unique<std::atomic<bool>[]>(n > 0 ? n : 1);
+        for (int i = 0; i < n; i++) {
+            per_cam_frames[i].store(0);
+            per_cam_exact[i].store(false);
+        }
+        per_cam_count = n;
+    }
+    int cam_frames(int i) const {
+        return (i >= 0 && i < per_cam_count) ? per_cam_frames[i].load() : 0;
+    }
+    int shortest_cam_frames() const {
+        int lo = INT_MAX;
+        for (int i = 0; i < per_cam_count; i++) lo = std::min(lo, cam_frames(i));
+        return per_cam_count ? lo : 0;
+    }
+    int longest_cam_frames() const {
+        int hi = 0;
+        for (int i = 0; i < per_cam_count; i++) hi = std::max(hi, cam_frames(i));
+        return hi;
+    }
+    bool any_cam_zero() const {
+        for (int i = 0; i < per_cam_count; i++)
+            if (cam_frames(i) <= 0) return true;
+        return per_cam_count == 0;
+    }
+    bool any_cam_estimated() const {
+        for (int i = 0; i < per_cam_count; i++)
+            if (!per_cam_exact[i].load()) return true;
+        return false;
+    }
+    bool cams_uneven() const {
+        return per_cam_count > 1 &&
+               shortest_cam_frames() != longest_cam_frames();
+    }
+
+    // What the transport bar reports. Ordered by severity: a camera with no
+    // frames at all is worse than an uneven set, and an uncertain reading is
+    // not worth calling a problem until the numbers are known.
+    enum class Lengths { ZeroFrames, Uneven, Uncertain, Even };
+    Lengths lengths_status() const {
+        // No separate "no cameras" state: the transport bar only draws once
+        // media is loaded, and both loaders allocate these slots before
+        // saying so, so an empty set cannot reach the readout. If it somehow
+        // did, any_cam_zero() reports it, which is the accurate wording.
+        if (any_cam_zero()) return Lengths::ZeroFrames;
+        if (any_cam_estimated()) return Lengths::Uncertain;
+        if (cams_uneven()) return Lengths::Uneven;
+        return Lengths::Even;
+    }
+
+    // Set when the loader owns total_num_frame, i.e. it has per-camera counts
+    // to derive it from. Decoder threads then refine their OWN slot at end of
+    // stream instead of writing the shared total -- which is how a derived
+    // count is corrected without reintroducing the race.
+    bool total_owned_by_loader = false;
+
+    // True when each camera's frames ARE the contiguous range [0, n), so a
+    // count can be read as a last index -- the video case, where the timeline
+    // is frame positions in the stream.
+    //
+    // False for images, where the timeline is the UNION of frame names across
+    // cameras (media_loader.h). There a camera holding 45 of 70 names does not
+    // hold names 0..44, it holds 45 scattered ones, and treating its count as
+    // an end would blank it at frame 45 while it still has files. The counts
+    // are still worth reporting; they just cannot say where a camera stops.
+    bool per_cam_contiguous = false;
 };
 
 #if defined(RED_HAVE_CUDA)
@@ -85,10 +239,32 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                      int size_of_buffer, SeekInfo *seek_info,
                      bool use_cpu_buffer,
                      const sync_plan::SyncCam *sync_cam = nullptr);
+// How an image-sequence project lays its frames out on disk.
+//   Flat        <root>/<cam>_<name>.<ext>   -- red's own convention
+//   PerCameraDir <root>/<cam>/<name>.<ext>  -- what a tailcycle-dataset group
+//                                              holds, so such a group can be
+//                                              opened without restructuring it
+enum class ImageLayout { Flat, PerCameraDir };
+
+inline std::string image_frame_path(const std::string &root_dir,
+                                    const std::string &cam_name,
+                                    const std::string &name,
+                                    const std::string &file_ext,
+                                    ImageLayout layout) {
+    return layout == ImageLayout::PerCameraDir
+               ? root_dir + "/" + cam_name + "/" + name + "." + file_ext
+               : root_dir + "/" + cam_name + "_" + name + "." + file_ext;
+}
+
 void image_loader(DecoderContext *dc_context,
                   const std::vector<std::string> &img_list_vector,
                   PictureBuffer *display_buffer, int size_of_buffer,
                   SeekInfo *seek_info, bool use_cpu_buffer,
                   std::string cam_name, std::string root_dir,
-                  std::string file_ext);
+                  std::string file_ext,
+                  // Not defaulted: image_loader is only ever invoked through a
+                  // function pointer (std::thread), and default arguments do
+                  // not apply there -- a missing argument would surface as an
+                  // "attempt to use a deleted function" inside <thread>.
+                  ImageLayout layout);
 #endif

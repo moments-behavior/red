@@ -2,7 +2,7 @@
 // keypoint_clipboard.h — multi-select + copy/paste/delete of keypoint SETS.
 //
 // Transient (never serialized) UI state backing three related gestures in the
-// Keypoints window and the Labeling Tool:
+// keypoints table and the rest of the Labeling Tool:
 //   * a File-Explorer-style multi-selection of keypoint columns (nodes),
 //   * copying that selection from one frame and pasting it onto another,
 //   * deleting keypoints (a hovered cell, a whole column, or the selection).
@@ -22,7 +22,7 @@
 #include <vector>
 
 struct KeypointClipboard {
-    // ── Selection: which nodes are selected in the Keypoints window ──
+    // ── Selection: which nodes are selected in the keypoints table ──
     // Sized to skeleton.num_nodes; 1 = selected. `anchor` is the last
     // plain/ctrl-clicked node, used as the pivot for Shift-range selection.
     std::vector<char> selected;
@@ -96,7 +96,7 @@ inline int copy_selected_keypoints(KeypointClipboard &kc, const FrameAnnotation 
         bool any_labeled = false;
         for (int c = 0; c < num_cams && c < (int)fa.cameras.size(); ++c)
             if (node < (int)fa.cameras[c].keypoints.size() &&
-                fa.cameras[c].keypoints[node].labeled) {
+                keypoint2d_assessed(fa.cameras[c].keypoints[node])) {
                 any_labeled = true;
                 break;
             }

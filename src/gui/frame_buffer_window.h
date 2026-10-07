@@ -1,5 +1,7 @@
 #pragma once
 #include "app_context.h"
+#include "keypoint_colors.h"
+#include <climits>
 
 // Draw the Frame Buffer window — a vertical list of buffered frames, one row
 // per slot, newest-first order matching the read head.
@@ -43,16 +45,73 @@ inline void DrawFrameBufferWindow(AppContext &ctx, int select_corr_head) {
             float item_w = ImGui::GetContentRegionAvail().x;
             ImDrawList *dl = ImGui::GetWindowDrawList();
 
+            // The ring has size_of_buffer slots whatever the timeline's
+            // length, so stop at total_num_frame rather than list frames past
+            // the end. INT_MAX means not known yet (a video still being
+            // measured): list every slot then.
+            const int total = ctx.dc_context ? ctx.dc_context->total_num_frame
+                                             : 0;
+            const bool total_known = total > 0 && total < INT_MAX;
+
+            // Keep the selected frame in view: centre its row whenever the
+            // selection moves from elsewhere -- the arrow keys, a seek, the
+            // timeline. Not after a click in this list: the row is already
+            // under the mouse, and scrolling it away from there would be the
+            // list moving under the click.
+            static int last_selected_frame = -1;
+            const int selected_frame =
+                ps.to_display_frame_number + ps.pause_selected;
+            const bool center_selected = selected_frame != last_selected_frame;
+            last_selected_frame = selected_frame;
+
             for (u32 i = 0; i < scene.size_of_buffer; i++) {
+                if (total_known &&
+                    ps.to_display_frame_number + (int)i >= total)
+                    break;
                 int buf_idx =
                     (i + ps.read_head) % scene.size_of_buffer;
-                int frame_num =
-                    scene.display_buffer[visible_idx][buf_idx].frame_number;
+                // This list is the TIMELINE, not one camera's holdings: it
+                // is read off a single camera's ring (visible_idx) only
+                // because the ring is where the numbers happen to live.
+                //
+                // So take the position from the ring's own invariant -- slot
+                // read_head+i is frame to_display+i -- rather than from what
+                // that slot stores. A camera stops writing at its own last
+                // frame, and the slots past it keep whatever was there from
+                // an earlier pass, which is how 202 and 203 came to sit after
+                // 239. Worse, their annotation state was looked up too, so a
+                // row was coloured by the labels of a frame it was not
+                // showing. Frame 240 exists -- in the longer cameras -- and
+                // belongs in this list under its own number, whether or not
+                // the camera being read has it.
+                const int frame_num = ps.to_display_frame_number + (int)i;
 
-                char label[32];
-                if (ctx.input_is_imgs)
-                    snprintf(label, sizeof(label), "%d:%s",
-                             frame_num, ctx.imgs_names[i].c_str());
+                // The frame number is the label. For images the source file
+                // name is worth appending only when it differs from the frame
+                // index -- a tailcycle group names frame 477 "000477", so
+                // printing both would just repeat itself.
+                //
+                // This used to index imgs_names by `i`, the ring-slot position,
+                // which named an unrelated file: "477:000017" meant "frame 477
+                // sits in slot 17".
+                char label[64];
+                const std::string *src_name = nullptr;
+                if (ctx.input_is_imgs && frame_num >= 0 &&
+                    frame_num < (int)ctx.imgs_names.size()) {
+                    const std::string &n = ctx.imgs_names[frame_num];
+                    // Not stoi: this runs every frame in the render loop, and a
+                    // non-numeric name would throw rather than mislabel.
+                    long v = 0;
+                    bool numeric = !n.empty();
+                    for (char c : n) {
+                        if (c < '0' || c > '9') { numeric = false; break; }
+                        v = v * 10 + (c - '0');
+                    }
+                    if (!numeric || v != frame_num) src_name = &n;
+                }
+                if (src_name)
+                    snprintf(label, sizeof(label), "%d (%s)", frame_num,
+                             src_name->c_str());
                 else
                     snprintf(label, sizeof(label), "%d", frame_num);
 
@@ -64,36 +123,87 @@ inline void DrawFrameBufferWindow(AppContext &ctx, int select_corr_head) {
                                       ImVec2(item_w, item_h))) {
                     if (!is_selected) {
                         ps.pause_selected = (int)i;
+                        // Chosen here: next frame must not re-centre on it.
+                        last_selected_frame = frame_num;
                     }
                 }
+                if (is_selected && center_selected)
+                    ImGui::SetScrollHereY(0.5f);
 
-                // Color code: green = fully labeled + triangulated,
-                // teal = partially labeled, default = unlabeled
+                // Label state, in the shared vocabulary (keypoint_colors.h),
+                // classified by the shared frame_kp_progress so this and the
+                // Labeling Tool's timeline cannot disagree about a frame.
+                // Unlabelled stays the theme's disabled text: in this list it
+                // is the common case, and an accent would light up the whole
+                // window.
                 const char *text = label;
                 ImU32 text_col;
                 auto ann_it = annotations.find((u32)frame_num);
-                if (ann_it != annotations.end() &&
-                    frame_has_any_keypoints(ann_it->second)) {
-                    bool complete = frame_is_complete(ann_it->second);
-                    if (complete && skeleton.has_skeleton &&
-                        (project_is_2d(ctx.pm) || scene.num_cams > 1)) {
-                        for (int k = 0; k < skeleton.num_nodes; ++k)
-                            if (!ann_it->second.kp3d[k].triangulated)
-                                complete = false;
-                    }
-                    text_col = complete
-                        ? IM_COL32(51, 204, 77, 255)   // green
-                        : IM_COL32(51, 179, 179, 255); // teal
-                } else {
+                const bool ann_ok = ann_it != annotations.end() &&
+                                    !ann_it->second.empty();
+                const FrameAnnotation *fa =
+                    ann_ok ? &ann_it->second.front() : nullptr;
+                KpProgress prog =
+                    fa ? frame_kp_progress(*fa, skeleton.num_nodes,
+                                           (int)scene.num_cams,
+                                           project_is_2d(ctx.pm),
+                                           skeleton.has_skeleton)
+                       : KpProgress::None;
+                const char *state_tip = nullptr;
+                if (fa && fa->needs_improvement) {
+                    text_col = ImGui::ColorConvertFloat4ToU32(kLabelNeedsFix);
+                    state_tip = "needs fixing";
+                } else switch (prog) {
+                case KpProgress::Complete:
+                    text_col = ImGui::ColorConvertFloat4ToU32(kLabelComplete);
+                    state_tip = "complete";
+                    break;
+                case KpProgress::Triangulated:
+                    text_col = ImGui::ColorConvertFloat4ToU32(kLabelTriangulated);
+                    state_tip = "triangulated";
+                    break;
+                case KpProgress::Untriangulated:
+                    text_col = ImGui::ColorConvertFloat4ToU32(kLabelUntriangulated);
+                    state_tip = "untriangulated";
+                    break;
+                case KpProgress::None:
+                default:
                     text_col = is_selected
                         ? ImGui::GetColorU32(ImGuiCol_Text)
                         : ImGui::GetColorU32(ImGuiCol_TextDisabled);
+                    break;
                 }
-                // Desync fix: this slot is a duplicate for a dropped frame
-                // on the visible camera — tint it red.
-                if (ctx.dc_context->sync_fix_active.load() &&
-                    scene.display_buffer[visible_idx][buf_idx].dropped.load())
-                    text_col = IM_COL32(230, 80, 80, 255);
+
+                // Desync fix: this slot holds a duplicate standing in for a
+                // frame the visible camera dropped. That is the media being at
+                // fault, not the labels, so it gets its own channel -- a red
+                // stripe down the left edge -- instead of overwriting the text
+                // colour. Recolouring the text lost the label state entirely:
+                // a complete, triangulated frame that happened to be a
+                // duplicate read as plain red.
+                const bool dropped =
+                    ctx.dc_context->sync_fix_active.load() &&
+                    scene.display_buffer[visible_idx][buf_idx].dropped.load();
+                if (dropped)
+                    dl->AddRectFilled(
+                        ImVec2(pos.x, pos.y),
+                        ImVec2(pos.x + 3.0f, pos.y + item_h),
+                        ImGui::ColorConvertFloat4ToU32(kFrameDropped));
+
+                if (ImGui::IsItemHovered() && (state_tip || dropped)) {
+                    if (state_tip && dropped)
+                        ImGui::SetTooltip(
+                            "%s \xE2\x80\x94 and a duplicate: a camera dropped "
+                            "this frame, so the nearest decoded one is shown.",
+                            state_tip);
+                    else if (dropped)
+                        ImGui::SetTooltip(
+                            "A camera dropped this frame; the nearest decoded "
+                            "one is shown in its place.");
+                    else
+                        ImGui::SetTooltip("%s", state_tip);
+                }
+
                 ImVec2 ts = ImGui::CalcTextSize(text);
                 ImVec2 text_pos(pos.x + 4.0f, pos.y + (item_h - ts.y) * 0.5f);
                 dl->AddText(text_pos, text_col, text);
@@ -105,6 +215,22 @@ inline void DrawFrameBufferWindow(AppContext &ctx, int select_corr_head) {
             ImGui::EndChild();
             ImGui::PopStyleVar(2);  // WindowPadding, ItemSpacing
             ImGui::SetWindowFontScale(1.0f);
+        }
+
+        // Seeking past the buffer: outlined red. The seek runs at the start of
+        // the next frame and blocks it, so this is the picture that stays up
+        // for as long as decoding takes -- a flicker when it is quick.
+        if (ps.pending_seek >= 0) {
+            const ImVec2 p0 = ImGui::GetWindowPos();
+            const ImVec2 sz = ImGui::GetWindowSize();
+            // The window's draw list is clipped to its contents, which leaves
+            // out the title bar / tab strip -- and with it the top edge.
+            ImDrawList *dl = ImGui::GetWindowDrawList();
+            dl->PushClipRect(p0, ImVec2(p0.x + sz.x, p0.y + sz.y), false);
+            dl->AddRect(ImVec2(p0.x + 1.5f, p0.y + 1.5f),
+                        ImVec2(p0.x + sz.x - 1.5f, p0.y + sz.y - 1.5f),
+                        IM_COL32(230, 50, 50, 255), 0.0f, 0, 3.0f);
+            dl->PopClipRect();
         }
     }
     ImGui::End();

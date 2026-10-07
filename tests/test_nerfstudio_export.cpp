@@ -14,12 +14,19 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <cstdlib>
 #include <iostream>
+#include <string>
 
 namespace fs = std::filesystem;
 
-static const char *PROJECT_PATH =
-    "/Users/johnsonr/red_demos/mouse_active1/mouse_active1.redproj";
+// The project to run against. This test needs a real labelled project with
+// calibration and video, so there is no default -- pass one, or set
+// RED_TEST_PROJECT. A path baked in here only works on one machine.
+static std::string project_path() {
+    if (const char *env = std::getenv("RED_TEST_PROJECT")) return env;
+    return std::string();
+}
 
 int main(int argc, char **argv) {
     std::string output_dir = "/tmp/red_nerfstudio_test";
@@ -27,15 +34,23 @@ int main(int argc, char **argv) {
 
     if (argc > 1) output_dir = argv[1];
     if (argc > 2) frame_num = std::atoi(argv[2]);
+    std::string proj_path = argc > 3 ? argv[3] : project_path();
+
+    if (proj_path.empty()) {
+        std::cerr << "Usage: test_nerfstudio_export [out_dir] [frame] <project.redproj>\n"
+                  << "   or: RED_TEST_PROJECT=/path/to/project.redproj test_nerfstudio_export\n";
+        return 2;
+    }
 
     std::cout << "=== Nerfstudio Export Test ===\n";
-    std::cout << "Output: " << output_dir << "\n";
-    std::cout << "Frame:  " << frame_num << "\n\n";
+    std::cout << "Project: " << proj_path << "\n";
+    std::cout << "Output:  " << output_dir << "\n";
+    std::cout << "Frame:   " << frame_num << "\n\n";
 
     // Load project file
-    std::ifstream pf(PROJECT_PATH);
+    std::ifstream pf(proj_path);
     if (!pf.is_open()) {
-        std::cerr << "Cannot open project: " << PROJECT_PATH << "\n";
+        std::cerr << "Cannot open project: " << proj_path << "\n";
         return 1;
     }
     nlohmann::json proj = nlohmann::json::parse(pf);

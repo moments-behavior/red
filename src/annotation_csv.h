@@ -12,7 +12,8 @@
 //
 // Empty cells = unlabeled (no 1E7 sentinel in file).
 // c = confidence (empty = manual, float = predicted).
-// s = source flag (empty = Manual, P = Predicted, I = Imported).
+// s = source flag (empty = Manual, P = Predicted, I = Imported,
+// M = assessed missing/occluded).
 // Coordinates in ImPlot space (Y=0 at bottom).
 
 #include "annotation.h"
@@ -105,31 +106,39 @@ inline bool save_2d_csv(const std::string &path, const std::string &skeleton_nam
     std::ofstream f(path);
     if (!f) return false;
 
-    // Header lines
-    f << "#red_csv v2\n";
+    // Header lines. v3 adds the instance column; the column header is what a
+    // reader keys off, so the version comment stays informational.
+    f << "#red_csv v3\n";
     f << "#skeleton " << skeleton_name << "\n";
 
-    // Column header: frame, then groups of (x, y, c, s) per keypoint
-    f << "frame";
+    // Column header: frame, instance, then groups of (x, y, c, s) per keypoint
+    f << "frame,instance";
     for (int k = 0; k < num_nodes; ++k)
         f << ",x" << k << ",y" << k << ",c" << k << ",s" << k;
     f << "\n";
 
-    // Data rows
-    for (const auto &[frame, fa] : amap) {
+    // One row per animal per frame.
+    for (const auto &[frame, fis] : amap)
+      for (const auto &fa : fis) {
         if (cam_idx >= (int)fa.cameras.size()) continue;
         const auto &cam = fa.cameras[cam_idx];
 
-        f << frame;
+        f << frame << "," << fa.instance_id;
         for (int k = 0; k < num_nodes; ++k) {
-            if (k < (int)cam.keypoints.size() && cam.keypoints[k].labeled) {
+            if (k < (int)cam.keypoints.size() && cam.keypoints[k].is_occluded()) {
+                // Assessed missing/occluded: no coordinates, but retain the
+                // determination instead of collapsing it into unlabeled.
+                f << ",,,M";
+            } else if (k < (int)cam.keypoints.size() && cam.keypoints[k].usable()) {
                 const auto &kp = cam.keypoints[k];
                 f << "," << kp.x << "," << kp.y << ",";
                 if (kp.confidence > 0.0f)
                     f << kp.confidence;
                 f << ",";
-                if (kp.source == LabelSource::Predicted) f << "P";
-                else if (kp.source == LabelSource::Imported) f << "I";
+                // 'I' is no longer written: Imported and Predicted were the
+                // same claim -- "not placed by a person here" -- and keeping
+                // two spellings of it meant two code paths that had to agree.
+                if (kp.is_predicted()) f << "P";
             } else {
                 f << ",,,,";
             }
@@ -146,21 +155,22 @@ inline bool save_3d_csv(const std::string &path, const std::string &skeleton_nam
     std::ofstream f(path);
     if (!f) return false;
 
-    // Header lines
-    f << "#red_csv v2\n";
+    // Header lines. See save_2d_csv for the v3 change.
+    f << "#red_csv v3\n";
     f << "#skeleton " << skeleton_name << "\n";
 
-    // Column header: frame, then groups of (x, y, z, c) per keypoint
-    f << "frame";
+    // Column header: frame, instance, then groups of (x, y, z, c) per keypoint
+    f << "frame,instance";
     for (int k = 0; k < num_nodes; ++k)
         f << ",x" << k << ",y" << k << ",z" << k << ",c" << k;
     f << "\n";
 
-    // Data rows
-    for (const auto &[frame, fa] : amap) {
-        f << frame;
+    // One row per animal per frame.
+    for (const auto &[frame, fis] : amap)
+      for (const auto &fa : fis) {
+        f << frame << "," << fa.instance_id;
         for (int k = 0; k < num_nodes; ++k) {
-            if (k < (int)fa.kp3d.size() && fa.kp3d[k].triangulated) {
+            if (k < (int)fa.kp3d.size() && fa.kp3d[k].exist) {
                 const auto &kp = fa.kp3d[k];
                 f << "," << kp.x << "," << kp.y << "," << kp.z << ",";
                 if (kp.confidence > 0.0f)
@@ -179,7 +189,20 @@ inline bool save_3d_csv(const std::string &path, const std::string &skeleton_nam
 inline std::string save_all(const std::string &root_dir, const std::string &skeleton_name,
                              const AnnotationMap &amap, int num_cameras, int num_nodes,
                              const std::vector<std::string> &camera_names,
-                             std::string *error = nullptr) {
+                             std::string *error = nullptr,
+                             const LabelInfo *label_info = nullptr) {
+    // An empty root makes folder "/<timestamp>" -- a directory at the
+    // filesystem root. A tailcycle session leaves keypoints_root_folder empty
+    // on purpose (red must not write its CSVs into someone else's dataset), so
+    // this is reachable from the Save button, not just from a bad argument.
+    if (root_dir.empty()) {
+        if (error)
+            *error = "This project has no label folder. A tailcycle session is "
+                     "saved with \"Save corrections to this session\" in the "
+                     "tailcycle Dataset panel.";
+        return {};
+    }
+
     std::string ts = current_timestamp();
     std::string folder = root_dir + "/" + ts;
 
@@ -209,7 +232,7 @@ inline std::string save_all(const std::string &root_dir, const std::string &skel
     }
 
     // Save extended annotations (bbox, obb, mask) if any
-    save_annotations_json(amap, folder);
+    save_annotations_json(amap, folder, label_info);
 
     return folder;
 }
@@ -229,11 +252,17 @@ inline bool load_3d_csv(const std::string &path, AnnotationMap &amap,
     }
 
     std::string line;
+    // See load_2d_csv: the column header says whether there is an instance.
+    bool has_instance = false;
+    bool has_class = false;   // v4: frame,class,instance (read, not written)
     while (std::getline(fin, line)) {
         // Skip comment lines
         if (!line.empty() && line[0] == '#') continue;
-        // Skip column header
-        if (line.size() >= 6 && line.substr(0, 6) == "frame,") continue;
+        if (line.size() >= 6 && line.substr(0, 6) == "frame,") {
+            has_class = line.rfind("frame,class,instance", 0) == 0;
+            has_instance = has_class || line.rfind("frame,instance", 0) == 0;
+            continue;
+        }
 
         if (line.empty()) continue;
 
@@ -242,7 +271,19 @@ inline bool load_3d_csv(const std::string &path, AnnotationMap &amap,
         if (!parse_csv_double(ptr, frame_d)) continue;
         u32 frame = (u32)frame_d;
 
-        FrameAnnotation &fa = get_or_create_frame(amap, frame, num_nodes, num_cameras);
+        if (has_class) {   // one class for now: skip it
+            double cat_d;
+            if (!parse_csv_double(ptr, cat_d)) continue;
+        }
+        int instance = 0;
+        if (has_instance) {
+            double inst_d;
+            if (!parse_csv_double(ptr, inst_d)) continue;
+            instance = (int)inst_d;
+        }
+
+        FrameAnnotation &fa =
+            get_or_create_frame(amap, frame, num_nodes, num_cameras, instance);
 
         // Read groups of (x, y, z, c) per keypoint
         for (int k = 0; k < num_nodes; ++k) {
@@ -256,10 +297,8 @@ inline bool load_3d_csv(const std::string &path, AnnotationMap &amap,
                 fa.kp3d[k].x = x;
                 fa.kp3d[k].y = y;
                 fa.kp3d[k].z = z;
-                // CSV v2 has no source column; treat as Triangulated (the
-                // only historical write path) and reviewed=false. The user
-                // can re-approve via the UI if they want it counted as
-                // training-quality.
+                // CSV v2 has no source column; treat as Triangulated, which
+                // is the only path that ever wrote one.
                 fa.kp3d[k].set_triangulated(has_c ? (float)c : 0.0f);
             }
             // else: stays at default (UNLABELED, triangulated=false)
@@ -280,11 +319,21 @@ inline bool load_2d_csv(const std::string &path, AnnotationMap &amap,
     }
 
     std::string line;
+    // v3 carries an instance column; v2 and earlier do not. (A v4 file, from
+    // a build that briefly wrote a class column too, still reads.) Detected from the
+    // column header rather than the version comment, so the file describes
+    // itself and a hand-edited comment cannot misdirect the parse.
+    bool has_instance = false;
+    bool has_class = false;   // v4: frame,class,instance (read, not written)
     while (std::getline(fin, line)) {
         // Skip comment lines
         if (!line.empty() && line[0] == '#') continue;
-        // Skip column header
-        if (line.size() >= 6 && line.substr(0, 6) == "frame,") continue;
+        // Column header: note the layout, then skip it
+        if (line.size() >= 6 && line.substr(0, 6) == "frame,") {
+            has_class = line.rfind("frame,class,instance", 0) == 0;
+            has_instance = has_class || line.rfind("frame,instance", 0) == 0;
+            continue;
+        }
 
         if (line.empty()) continue;
 
@@ -293,7 +342,19 @@ inline bool load_2d_csv(const std::string &path, AnnotationMap &amap,
         if (!parse_csv_double(ptr, frame_d)) continue;
         u32 frame = (u32)frame_d;
 
-        FrameAnnotation &fa = get_or_create_frame(amap, frame, num_nodes, num_cameras);
+        if (has_class) {   // one class for now: skip it
+            double cat_d;
+            if (!parse_csv_double(ptr, cat_d)) continue;
+        }
+        int instance = 0;
+        if (has_instance) {
+            double inst_d;
+            if (!parse_csv_double(ptr, inst_d)) continue;
+            instance = (int)inst_d;
+        }
+
+        FrameAnnotation &fa =
+            get_or_create_frame(amap, frame, num_nodes, num_cameras, instance);
         if (cam_idx >= (int)fa.cameras.size()) continue;
         auto &cam = fa.cameras[cam_idx];
 
@@ -305,14 +366,29 @@ inline bool load_2d_csv(const std::string &path, AnnotationMap &amap,
             bool has_c = parse_csv_double(ptr, c);
             char  src  = parse_csv_char(ptr);
 
-            if (has_x && has_y) {
+            if (src == 'M') {
+                // 'M' sits in the source column, so the file cannot also say
+                // who made the assessment; treat it as the user's, which is
+                // what every other unmarked row means.
+                // Just the assessment. 'M' occupies the source column, so
+                // the file cannot say who made the call -- and it does not
+                // need to: an occluded point with no `predicted` buckets as
+                // annotated, which is what an unmarked row means everywhere
+                // else in this format.
+                cam.keypoints[k].set_occluded();
+            } else if (has_x && has_y) {
                 cam.keypoints[k].x = x;
                 cam.keypoints[k].y = y;
-                cam.keypoints[k].labeled = true;
+                cam.keypoints[k].vis = Keypoint2D::Vis::Unknown;
+                cam.keypoints[k].reprojected = false;
                 cam.keypoints[k].confidence = has_c ? (float)c : 0.0f;
-                if (src == 'P') cam.keypoints[k].source = LabelSource::Predicted;
-                else if (src == 'I') cam.keypoints[k].source = LabelSource::Imported;
-                else cam.keypoints[k].source = LabelSource::Manual;
+                // 'R' is new. 'P' and the legacy 'I' both read as predicted:
+                // files written before reprojection and model output were
+                // told apart cannot say which they were, and predicted is the
+                // safer reading -- it keeps them out of the annotated bucket.
+                if (src == 'R')      cam.keypoints[k].set_reprojected();
+                else if (src == 'P' || src == 'I') cam.keypoints[k].set_predicted();
+                else                 cam.keypoints[k].set_manual();
             }
             // else: stays at default (UNLABELED, labeled=false)
         }
@@ -325,7 +401,8 @@ inline bool load_2d_csv(const std::string &path, AnnotationMap &amap,
 // Returns 0 on success, 1 on error.
 inline int load_all(const std::string &folder, AnnotationMap &amap,
                      const std::string &skeleton_name, int num_nodes, int num_cameras,
-                     const std::vector<std::string> &camera_names, std::string &error) {
+                     const std::vector<std::string> &camera_names, std::string &error,
+                     LabelInfo *label_info = nullptr) {
     namespace fs = std::filesystem;
 
     // Validate skeleton from 3D header
@@ -415,7 +492,7 @@ inline int load_all(const std::string &folder, AnnotationMap &amap,
     }
 
     // Load extended annotations (bbox, obb, mask) if present
-    load_annotations_json(amap, folder);
+    load_annotations_json(amap, folder, label_info);
 
     return has_error ? 1 : 0;
 }

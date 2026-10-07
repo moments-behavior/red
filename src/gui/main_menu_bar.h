@@ -1,13 +1,17 @@
 #pragma once
 #include "app_context.h"
+#include "video_files.h"
 #include "gui/window_states.h"
 #include "IconsForkAwesome.h"
+#include "tailcycle_import.h"
+#include "gui/tailcycle_open_window.h"
+#include "gui/folder_dialog.h"
 #include <ImGuiFileDialog.h>
+#include <filesystem>
 
 inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     auto &annot_state      = win.annotation;
     auto &settings_state   = win.settings;
-    auto &jarvis_export_state = win.jarvis_export;
     auto &export_state     = win.export_win;
     auto &bbox_state       = win.bbox;
     auto &obb_state        = win.obb;
@@ -21,128 +25,266 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         return;
 
     // --- Text menus ---
+    // File: getting things in and out. Project: this project's settings.
+    // Label: the labelling tools. View: windows to look at. Then Tailcycle and
+    // Help. 3D / calibration-dependent entries are disabled for 2D
+    // (uncalibrated) projects -- they index camera calibration.
+    const bool is_2d = project_is_2d(pm);
 
     if (ImGui::BeginMenu("File")) {
-        if (ImGui::MenuItem("Open Video(s)")) {
-            IGFD::FileDialogConfig config;
-            config.countSelectionMax = 0;
-            config.path = pm.media_folder;
-            config.flags = ImGuiFileDialogFlags_Modal;
-            ImGuiFileDialog::Instance()->OpenDialog(
-                "ChooseMedia", "Choose Media", ".mp4", config);
-        }
-        if (ImGui::MenuItem("Open Images")) {
-            IGFD::FileDialogConfig config;
-            config.countSelectionMax = 0;
-            config.path = pm.media_folder;
-            config.flags = ImGuiFileDialogFlags_Modal;
-            ImGuiFileDialog::Instance()->OpenDialog(
-                "ChooseImages", "Choose Images",
-                ".jpg,.tiff,.jpeg,.png", config);
-        }
-        ImGui::BeginDisabled(!ps.video_loaded);
-        if (ImGui::MenuItem("Create Project")) {
-            pm.show_project_window = true;
-        }
-        ImGui::EndDisabled();
-        if (ImGui::MenuItem("Load Project")) {
+        // "New / Open Project" for the Welcome screen's Create / Load
+        // Annotation Project: the same form and the same dialog.
+        if (ImGui::MenuItem("New Project..."))
+            annot_state.open();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("Create an annotation project: one or more "
+                              "cameras; with several, choose\ncalibrated (3D "
+                              "triangulation) or not (2D labels only) in the form.");
+        if (ImGui::MenuItem("Open Project...")) {
             IGFD::FileDialogConfig config;
             config.countSelectionMax = 1;
-            config.path = pm.project_root_path;
+            config.path = default_project_root(user_settings, ctx.default_dir);
             config.flags = ImGuiFileDialogFlags_Modal;
             ImGuiFileDialog::Instance()->OpenDialog(
                 "ChooseProject", "Choose Project File", ".redproj",
                 config);
         }
+        if (ImGui::BeginMenu("Recent Projects",
+                             !user_settings.recent_projects.empty())) {
+            for (const auto &path : user_settings.recent_projects) {
+                std::filesystem::path p(path);
+                const std::string shown =
+                    p.parent_path().filename().string() + "/" + p.filename().string();
+                std::error_code ec;
+                if (ImGui::MenuItem(shown.c_str(), nullptr, false,
+                                    std::filesystem::exists(path, ec)))
+                    win.load_project_request = path;   // the main loop loads it
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("%s", path.c_str());
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Open Videos...")) {
+            IGFD::FileDialogConfig config;
+            config.countSelectionMax = 0;
+            config.path = media_browse_dir(ctx);
+            config.flags = ImGuiFileDialogFlags_Modal;
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "ChooseMedia", "Choose Media", video_ext_filter(), config);
+        }
+        if (ImGui::MenuItem("Open Images...")) {
+            IGFD::FileDialogConfig config;
+            config.countSelectionMax = 0;
+            config.path = media_browse_dir(ctx);
+            config.flags = ImGuiFileDialogFlags_Modal;
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "ChooseImages", "Choose Images", image_ext_filter(), config);
+        }
+        ImGui::Separator();
+        // Same action as the toolbar floppy icon and the Labeling Tool's Save
+        // button: ctx.save_requested is forwarded to the labeling tool.
+        ImGui::BeginDisabled(!pm.plot_keypoints_flag);
+        if (ImGui::MenuItem("Save", RED_MOD_KEY "+S"))
+            ctx.save_requested = true;
+        ImGui::EndDisabled();
+        ImGui::Separator();
+        // The formats themselves, each opening the export window with it
+        // chosen.
+        if (ImGui::BeginMenu("Export")) {
+            // Every format exports labels: with none, say so here rather
+            // than in the window after Export is pressed.
+            const bool have_labels = !ctx.annotations.empty();
+            auto format_item = [&](const char *label, ExportFormats::Format f) {
+                ImGui::BeginDisabled(!have_labels);
+                if (ImGui::MenuItem(label)) {
+                    export_state.show = true;
+                    export_state.want_format = (int)f;
+                }
+                ImGui::EndDisabled();
+                if (!have_labels &&
+                    ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Nothing to export yet: open a project and "
+                                      "label some frames.");
+            };
+            format_item("JARVIS...", ExportFormats::JARVIS);
+            format_item("COCO Keypoints...", ExportFormats::COCO);
+            format_item("DeepLabCut...", ExportFormats::DEEPLABCUT);
+            format_item("YOLO Pose...", ExportFormats::YOLO_POSE);
+            format_item("YOLO Detection...", ExportFormats::YOLO_DETECT);
+            // Also in the Tailcycle menu; here too so every format is in
+            // one list. Needs Arrow, like the export itself.
+            if (TailcycleExport::available())
+                format_item("tailcycle-dataset...", ExportFormats::TAILCYCLE);
+            ImGui::BeginDisabled(is_2d);
+            format_item("Nerfstudio / 3DGS...", ExportFormats::NERFSTUDIO);
+            ImGui::EndDisabled();
+            if (is_2d && !ctx.annotations.empty() &&
+                ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Needs a calibrated project: Nerfstudio / 3DGS "
+                                  "takes the cameras'\npositions and lenses from "
+                                  "its calibration.");
+            ImGui::Separator();
+            // A standalone multi-dataset merge: works with no project open.
+            if (ImGui::MenuItem("Group JARVIS (several projects)..."))
+                win.group_export.show = true;
+            ImGui::EndMenu();
+        }
+        ImGui::BeginDisabled(is_2d);
+        if (ImGui::MenuItem("Import JARVIS Predictions..."))
+            win.jarvis_import.show = true;
+        ImGui::EndDisabled();
+        ImGui::Separator();
+        if (ImGui::MenuItem("Settings..."))
+            settings_state.show = true;
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Project")) {
         ImGui::BeginDisabled(pm.project_path.empty());
         if (ImGui::MenuItem("Switch Skeleton...")) {
             win.switch_skeleton.show = true;
             win.switch_skeleton.initialized = false;
         }
         ImGui::EndDisabled();
-        ImGui::Separator();
-        // Save Labels — same action as the toolbar floppy icon and the Labeling
-        // Tool's Save button: ctx.save_requested is forwarded to the labeling
-        // tool, which writes the per-camera and 3D label CSVs.
-        ImGui::BeginDisabled(!pm.plot_keypoints_flag);
-        if (ImGui::MenuItem("Save Labels")) {
-            ctx.save_requested = true;
+        // Where this project's per-camera timestamps are, for the desync fix
+        // and Frame Drops. A project setting: red does not look for them.
+        const bool can_set_timestamps = !pm.project_path.empty() &&
+                                        ps.video_loaded && !ctx.input_is_imgs &&
+                                        !is_2d;
+        ImGui::BeginDisabled(!can_set_timestamps);
+        if (ImGui::MenuItem("Camera Timestamps...")) {
+            IGFD::FileDialogConfig config;
+            config.countSelectionMax = 1;
+            config.path = !pm.timestamps_folder.empty() ? pm.timestamps_folder
+                                                        : pm.media_folder;
+            config.flags = ImGuiFileDialogFlags_Modal;
+            open_folder_dialog("ChooseProjectTimestamps", "Select Camera Timestamps Folder",
+                               timestamps_folder_kind(), config);
         }
         ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort |
+                                 ImGuiHoveredFlags_AllowWhenDisabled)) {
+            if (!can_set_timestamps)
+                ImGui::SetTooltip(pm.untitled
+                                      ? "Save the project first (" RED_MOD_KEY "+S)."
+                                  : is_2d && ps.video_loaded
+                                      ? "For calibrated cameras: a 2D project's "
+                                        "videos have their own timelines."
+                                      : "Open a video project first.");
+            else if (pm.timestamps_folder.empty())
+                ImGui::SetTooltip("Choose the folder with the cameras' frame "
+                                  "timestamps, for the desync fix\nand Frame "
+                                  "Drops. None is set for this project.");
+            else
+                ImGui::SetTooltip("Timestamps from: %s",
+                                  pm.timestamps_folder.c_str());
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Skeleton Creator..."))
+            win.skeleton_creator.show = true;
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("Draw a skeleton and save it as the .json a "
+                              "project loads.");
         ImGui::EndMenu();
     }
 
-    if (ImGui::BeginMenu("Annotate")) {
-        if (ImGui::MenuItem("Create Annotation Project")) {
-            annot_state.show = true;
-            annot_state.discovered_cameras.clear();
-            annot_state.camera_selected.clear();
-            annot_state.status.clear();
-        }
-        if (ImGui::MenuItem("Load Annotation Project")) {
-            IGFD::FileDialogConfig cfg;
-            cfg.countSelectionMax = 1;
-            cfg.path = pm.project_root_path;
-            cfg.flags = ImGuiFileDialogFlags_Modal;
-            ImGuiFileDialog::Instance()->OpenDialog(
-                "LoadAnnotProject", "Load Annotation Project",
-                "Red Project{.redproj}", cfg);
-        }
-        ImGui::EndMenu();
-    }
-
-    if (ImGui::BeginMenu("Tools")) {
-        // 3D / calibration-dependent tools are disabled for 2D (uncalibrated)
-        // projects — they index camera calibration and would otherwise crash.
-        const bool is_2d = project_is_2d(pm);
-
-        if (ImGui::MenuItem("Export Tool")) {
-            export_state.show = true;
-        }
-        // Standalone multi-dataset merge — works with no project open, so it is
-        // deliberately NOT gated by the is_2d / open-project check below.
-        if (ImGui::MenuItem("Group JARVIS Export...")) {
-            win.group_export.show = true;
-        }
-        ImGui::Separator();
-        ImGui::BeginDisabled(is_2d);
-        if (ImGui::MenuItem("JARVIS Export Tool")) {
-            jarvis_export_state.show = true;
-        }
-        if (ImGui::MenuItem("Import JARVIS Predictions")) {
-            win.jarvis_import.show = true;
-        }
-        ImGui::EndDisabled();
-        ImGui::Separator();
-        if (ImGui::MenuItem("Bbox Tool")) {
+    if (ImGui::BeginMenu("Label")) {
+        if (ImGui::MenuItem("Bbox Tool"))
             bbox_state.show = true;
-        }
-        if (ImGui::MenuItem("OBB Tool")) {
+        if (ImGui::MenuItem("OBB Tool"))
             obb_state.show = true;
-        }
         ImGui::BeginDisabled(is_2d);
-        if (ImGui::MenuItem("Midline Tool")) {
+        if (ImGui::MenuItem("Midline Tool"))
             win.midline.show = true;
-        }
-        ImGui::Separator();
-        if (ImGui::MenuItem("Triangulation Diagnostics")) {
-            triangulation_diag_state.show = true;
-        }
         ImGui::EndDisabled();
         ImGui::EndMenu();
     }
 
     if (ImGui::BeginMenu("View")) {
-        if (ImGui::MenuItem("Pose Stats")) {
+        if (ImGui::MenuItem("Pose Stats"))
             win.pose_stats.show = true;
-        }
-        if (ImGui::MenuItem("Frame Drops")) {
+        if (ImGui::MenuItem("Frame Drops"))
             win.frame_drops.show = true;
-        }
+        ImGui::BeginDisabled(is_2d);
+        if (ImGui::MenuItem("Triangulation Diagnostics"))
+            triangulation_diag_state.show = true;
+        ImGui::EndDisabled();
         ImGui::Separator();
-        if (ImGui::MenuItem("Help")) {
-            show_help_window = true;
+        if (ImGui::BeginMenu("Text Size")) {
+            const float cur = user_settings.ui_text_scale;
+            if (ImGui::MenuItem("Larger", keys::display(keys::Sc::TextLarger).c_str(),
+                                false, cur < kUiTextScaleMax))
+                set_ui_text_scale(ctx, cur + kUiTextScaleStep);
+            if (ImGui::MenuItem("Smaller", keys::display(keys::Sc::TextSmaller).c_str(),
+                                false, cur > kUiTextScaleMin))
+                set_ui_text_scale(ctx, cur - kUiTextScaleStep);
+            char reset[48];
+            snprintf(reset, sizeof(reset), "Reset (now %d%%)", (int)std::lround(cur * 100));
+            if (ImGui::MenuItem(reset, keys::display(keys::Sc::TextReset).c_str(),
+                                false, cur != 1.0f))
+                set_ui_text_scale(ctx, 1.0f);
+            ImGui::EndMenu();
         }
+        ImGui::EndMenu();
+    }
+
+    // Its own menu rather than one entry in File and a format buried in the
+    // Export Tool's combo, with tracktail, the tracker that works with it.
+    // The dataset entries need Parquet and are left out without it; tracktail
+    // does not.
+    if (ImGui::BeginMenu("Tailcycle")) {
+        if (TailcycleImport::available()) {
+            if (ImGui::MenuItem("Open Dataset...")) {
+                run_or_confirm_unsaved(ctx, [&win]() {
+                    tailcycle_open_browse(win.tailcycle_open);
+                });
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("Open a tailcycle-dataset session to look at or "
+                                  "correct.");
+            ImGui::BeginDisabled(pm.project_path.empty() && !ps.video_loaded);
+            if (ImGui::MenuItem("Export Dataset...")) {
+                export_state.show = true;
+                export_state.want_format = (int)ExportFormats::TAILCYCLE;
+            }
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort |
+                                     ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Write this project out as a tailcycle-dataset. "
+                                  "Opens Export with that format chosen.");
+            ImGui::Separator();
+        }
+        // Needs calibration: it tracks the 3D keypoints.
+        ImGui::BeginDisabled(project_is_2d(pm));
+        if (ImGui::MenuItem("tracktail")) {
+            win.tracktail.show = true;
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort |
+                                 ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Predict the next frames from the current "
+                              "frame's 3D keypoints (forward temporal "
+                              "tracker).");
+        ImGui::EndMenu();
+    }
+
+    // Help: last, where both macOS and Windows put it.
+    if (ImGui::BeginMenu("Help")) {
+        if (ImGui::MenuItem("Red Help", keys::display(keys::Sc::ToggleHelp).c_str()))
+            show_help_window = true;
+        ImGui::Separator();
+        if (ImGui::MenuItem("About Red"))
+            win.show_about = true;
+        if (ImGui::MenuItem("Report an Issue...")) {
+            ImGuiPlatformIO &pio = ImGui::GetPlatformIO();
+            if (pio.Platform_OpenInShellFn)
+                pio.Platform_OpenInShellFn(ImGui::GetCurrentContext(),
+                                           "https://github.com/moments-behavior/red/issues");
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("Opens red's GitHub issues page. Include the "
+                              "version from About Red.");
         ImGui::EndMenu();
     }
 
@@ -150,19 +292,17 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
 
     // New Project
-    ImGui::BeginDisabled(!ps.video_loaded);
     if (ImGui::MenuItem(ICON_FK_FILE_O "##toolbar_new")) {
-        pm.show_project_window = true;
+        annot_state.open();
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-        ImGui::SetTooltip("Create Project");
-    ImGui::EndDisabled();
+        ImGui::SetTooltip("New Project");
 
     // Open Project
     if (ImGui::MenuItem(ICON_FK_FOLDER_OPEN "##toolbar_open")) {
         IGFD::FileDialogConfig config;
         config.countSelectionMax = 1;
-        config.path = pm.project_root_path;
+        config.path = default_project_root(user_settings, ctx.default_dir);
         config.flags = ImGuiFileDialogFlags_Modal;
         ImGuiFileDialog::Instance()->OpenDialog(
             "ChooseProject", "Choose Project File", ".redproj",
@@ -177,7 +317,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         ctx.save_requested = true;
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-        ImGui::SetTooltip("Save Labels");
+        ImGui::SetTooltip("Save (" RED_MOD_KEY "+S)");
     ImGui::EndDisabled();
 
     // Settings
@@ -187,15 +327,8 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         ImGui::SetTooltip("Settings");
 
-    // --- Right-aligned project name ---
-    if (!pm.project_name.empty()) {
-        float avail = ImGui::GetContentRegionAvail().x;
-        float text_w = ImGui::CalcTextSize(pm.project_name.c_str()).x;
-        if (avail > text_w + 8.0f) {
-            ImGui::SameLine(ImGui::GetWindowWidth() - text_w - 16.0f);
-            ImGui::TextDisabled("%s", pm.project_name.c_str());
-        }
-    }
+    // The project's name is in the window title ("Red - <name>"), so the
+    // menu bar does not repeat it.
 
     ImGui::EndMainMenuBar();
 }

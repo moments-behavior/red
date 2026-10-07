@@ -1,4 +1,4 @@
-# red labeling 📍
+# <img src="icon.png" alt="" height="48"> red labeling 
 
 A 3D multi-camera labeling tool for fast review and triangulation across many synchronized video streams.
 
@@ -6,13 +6,69 @@ A 3D multi-camera labeling tool for fast review and triangulation across many sy
 
 ## Overview
 
-`red` is the labeling counterpart to [orange](https://github.com/moments-behavior/orange). It takes multi-view video (typically recorded with `orange`) and lets you label keypoints across all camera views simultaneously, with real-time hardware-accelerated decoding of h264 / hevc (NVDEC + CUDA on Linux and Windows, VideoToolbox + Metal on macOS), synchronized playback across all cameras, and multi-view triangulation. Labeled data can be exported for downstream training (YOLO detection, YOLO pose, JARVIS).
+`red` is the labeling counterpart to [orange](https://github.com/moments-behavior/orange). It takes multi-view video (typically recorded with `orange`) and lets you label keypoints across all camera views simultaneously, with real-time hardware-accelerated decoding of h264 / hevc (NVDEC + CUDA on Linux and Windows, VideoToolbox + Metal on macOS), synchronized playback across all cameras, and multi-view triangulation. Labeled data can be exported for downstream training (YOLO detection, YOLO pose, JARVIS, COCO keypoints, DeepLabCut, [tailcycle](https://github.com/AI-HHMI/tailcyclenet)).
 
 ## Documentation
 
 Full documentation — installation, configuration, data export — lives at the [moments-behavior docs site](https://moments-behavior.github.io/docs/red/). The site currently documents the Linux build; see Build below for macOS and Windows.
 
 [Video demo](https://www.youtube.com/watch?v=9eOJaadE1Nc)
+
+## Download and run
+
+Ready-made builds are on the [Releases page](https://github.com/moments-behavior/red/releases):
+no compiler or dependencies needed. They decode video on the CPU, so they run
+on any machine, with or without a GPU; build from source (below) for GPU
+decoding.
+
+### macOS (Apple Silicon)
+
+1. Download `red-<version>-macos<N>-arm64.zip` and double-click it: you get
+   **Red.app**. Drag it to Applications.
+2. The first time, macOS blocks it, since it is not from the App Store. Open
+   **System Settings > Privacy & Security**, scroll to the message about Red
+   and click **Open Anyway**, then open Red again. (Right-click > Open no
+   longer does this on macOS 15 and later.)
+
+Needs an Apple Silicon Mac (M1 or later) on the macOS version in the file
+name (`macos15`: macOS 15 or later).
+
+### Windows (64-bit)
+
+Either:
+
+- **Installer**: run `red-<version>-windows-x64-setup.exe`. It installs for
+  you alone, without needing an administrator (or for everyone, if you
+  choose), adds Red to the Start menu, and can be removed from
+  **Settings > Apps**.
+- **Portable zip**: unzip `red-<version>-windows-x64.zip` anywhere and run
+  `red\bin\red.exe`. Nothing is installed; delete the folder to remove it.
+
+If SmartScreen says "Windows protected your PC", click **More info >
+Run anyway**: the build is not code-signed.
+
+### Linux (x86-64, Ubuntu 22.04 or later)
+
+Either:
+
+- **AppImage**: one file, nothing to install.
+  ```bash
+  chmod +x red-<version>-linux-x86_64.AppImage
+  ./red-<version>-linux-x86_64.AppImage
+  ```
+- **Tarball**: unpack and run.
+  ```bash
+  tar xzf red-<version>-linux-x64.tar.gz
+  ./red/bin/red
+  ```
+
+Any distribution with glibc 2.35 or newer should work (Ubuntu 22.04's).
+
+### Your settings and projects
+
+Red keeps its settings (text size, recent projects, where dialogs start, ...)
+in `~/.config/red/` (`%USERPROFILE%\.config\red\` on Windows). Projects are
+wherever you save them. Removing or updating Red leaves both alone.
 
 ## Dependencies
 
@@ -24,6 +80,9 @@ Full documentation — installation, configuration, data export — lives at the
 | Math | Eigen3, Ceres Solver | Eigen3, Ceres Solver, CBLAS/OpenBLAS | Eigen3, Ceres Solver |
 | Images | libjpeg-turbo | — | libjpeg-turbo |
 | GPU | — (VideoToolbox + Metal are part of macOS) | CUDA Toolkit with NVDEC | CUDA Toolkit 12.x with NVDEC |
+| Dataset export | Apache Arrow + Parquet | ← same | ← same |
+
+red is built as C++20, so it needs GCC 10+, Clang 10+, or Visual Studio 2022.
 
 Homebrew, apt and vcpkg are the paths below, but nothing requires them — any
 install CMake can find via `find_package` / `pkg-config` works.
@@ -38,7 +97,7 @@ cd red
 **macOS** (Apple Silicon)
 
 ```bash
-brew install cmake pkg-config ffmpeg glfw eigen ceres-solver jpeg-turbo
+brew install cmake pkg-config ffmpeg glfw eigen ceres-solver jpeg-turbo apache-arrow
 ./build.sh          # builds release/red
 ./release/red
 ```
@@ -49,6 +108,12 @@ brew install cmake pkg-config ffmpeg glfw eigen ceres-solver jpeg-turbo
 sudo apt install cmake pkg-config libglfw3-dev libglew-dev libeigen3-dev \
     libceres-dev libopenblas-dev libgtest-dev nvidia-cuda-toolkit \
     libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
+
+# Arrow is not in Ubuntu's archive; add Apache's repository
+wget https://apache.jfrog.io/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
+sudo apt install -y -V ./apache-arrow-apt-source-latest-*.deb
+sudo apt update && sudo apt install -y -V libarrow-dev libparquet-dev
+
 ./build.sh
 ./release/red
 ```
@@ -56,7 +121,7 @@ sudo apt install cmake pkg-config libglfw3-dev libglew-dev libeigen3-dev \
 **Windows** (NVIDIA GPU with NVDEC)
 
 ```powershell
-vcpkg install glfw3 glew eigen3 ceres libjpeg-turbo --triplet x64-windows
+vcpkg install glfw3 glew eigen3 ceres libjpeg-turbo arrow[parquet] --triplet x64-windows
 .\build.bat                              # builds release\red.exe
 $env:PATH = "C:\ffmpeg\bin;$env:PATH"
 .\release\red.exe
@@ -69,8 +134,29 @@ and `lib\`, not just `ffmpeg.exe`), unpacked to `C:\ffmpeg` or pointed at by
 2026-08 with the `win64-lgpl-shared` build from
 [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases).
 
-`build.bat` locates Visual Studio, CUDA, vcpkg and FFmpeg itself. Set
-`VCPKG_ROOT` if vcpkg is not on `PATH` or at `$env:USERPROFILE\vcpkg`.
+`build.bat` locates Visual Studio, CUDA, vcpkg and FFmpeg itself; set
+`VCPKG_ROOT` if vcpkg is not on `PATH` or at `$env:USERPROFILE\vcpkg`. It
+needs **MSVC 14.4x** (VS 2022 17.14 or newer) — older toolsets fail to build
+Arrow — and a **CUDA** release new enough for that MSVC, since `nvcc` rejects
+newer host compilers and CMake reports it as *no CUDA compiler found*.
+
+### Building without Arrow
+
+Arrow is the one dependency red does not require. Leave it out and everything
+else works; the `tailcycle-dataset` entry simply does not appear in the export
+window. Configure says which way it went:
+
+```
+-- Arrow 25.0.1 found -- tailcycle export enabled
+-- Arrow/Parquet not found -- tailcycle export disabled
+```
+
+With Arrow present the build also produces `test_tailcycle_export`, a
+self-contained check that needs no project or fixture data:
+
+```bash
+./release/test_tailcycle_export      # expect: ALL CHECKS PASSED
+```
 
 ### Building for a machine without a GPU
 
@@ -84,6 +170,10 @@ build the CPU version instead:
 
 It does the same things, just slower — expect a large frame-rate drop with many
 cameras.
+
+Only playback is affected. Every export format decodes with FFmpeg in software
+on Linux and Windows regardless of this flag, so a CPU-only build extracts
+frames at full capability.
 
 On Linux this has to be a separate build: a normal build needs the NVIDIA
 driver's libraries just to start up, so without them red will not launch at
@@ -110,6 +200,15 @@ Remove-Item Env:RED_DECODE_BACKEND       # back to the default
 ```
 
 red prints which backend it chose at startup.
+
+### tracktail (this branch)
+
+`multianimal_posetail` adds **Tailcycle → tracktail**: label one frame,
+triangulate, and tracktail predicts the next frames for that animal across
+all cameras (3D + reprojected 2D, marked *Predicted*). Inference runs on
+the tracktail HTTP server (`server/server.py` in
+[AI-HHMI/tracktail](https://github.com/AI-HHMI/tracktail)), so red needs
+nothing extra to build. See [`docs/TRACKTAIL.md`](docs/TRACKTAIL.md).
 
 ## Authors
 

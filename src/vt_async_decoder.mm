@@ -342,6 +342,13 @@ void VTAsyncDecoder::submit(const uint8_t *data, size_t size,
                             bool is_keyframe) {
     if (!session_) return;
 
+    // Packets are flowing again, so go back to withholding for reorder. Only
+    // drain_at_eos() sets this; flush() clears it itself.
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        flushing_ = false;
+    }
+
     // Convert Annex-B → AVCC for VT
     std::vector<uint8_t> avcc = annexb_to_avcc(data, size);
     if (avcc.empty()) return;
@@ -446,6 +453,13 @@ CVPixelBufferRef VTAsyncDecoder::pop_next() {
 // ---------------------------------------------------------------------------
 // VTAsyncDecoder::flush
 // ---------------------------------------------------------------------------
+
+void VTAsyncDecoder::drain_at_eos() {
+    if (session_)
+        VTDecompressionSessionFinishDelayedFrames(session_);
+    std::lock_guard<std::mutex> lk(mutex_);
+    flushing_ = true;
+}
 
 void VTAsyncDecoder::flush() {
     if (session_) {

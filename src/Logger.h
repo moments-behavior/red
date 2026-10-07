@@ -19,7 +19,15 @@
 #include <time.h>
 
 #ifdef _WIN32
-#include <winsock.h>
+// winsock2.h, not the old winsock.h: cpp-httplib (tracktail's server client)
+// includes winsock2.h, and the two cannot both be in one translation unit --
+// whichever comes second redefines sockaddr, fd_set, accept... This file is
+// included early, so it decides. winsock2.h has everything UdpOstream below
+// uses; inet_addr is deprecated there, hence the define.
+#ifndef _WINSOCK_DEPRECATED_NO_WARNINGS
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
+#endif
+#include <winsock2.h>
 #include <windows.h>
 
 #pragma comment(lib, "ws2_32.lib")

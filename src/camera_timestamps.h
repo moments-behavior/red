@@ -246,19 +246,32 @@ inline std::string pick_lab_file(const std::string &folder, const std::string &g
                                  int expected) {
     namespace fs = std::filesystem;
     std::string best; long best_rows = -1; bool exact = false;
+    // Nothing here may throw. This runs on every video load, over the video's
+    // folder AND its parent -- Downloads and the user's home folder, say -- and
+    // on Windows path::string() throws for a name outside the code page (CJK,
+    // emoji...), is_regular_file() for a locked system file, and the
+    // iterator's ++ for a folder it cannot read. Uncaught, any of them ended
+    // red (ucrtbase 0xc0000409) on a PC whose Downloads held such a name,
+    // although the timestamp files sought are plain ASCII and never are one.
     std::error_code ec;
-    for (const auto &entry : fs::directory_iterator(folder, ec)) {
-        if (!entry.is_regular_file()) continue;
-        std::string name = entry.path().filename().string();
-        if (!detail::wildcard_match(glob, name)) continue;
-        // count rows (cheap: count newlines)
-        std::ifstream f(entry.path());
-        long rows = 0; std::string l;
-        while (std::getline(f, l)) if (!l.empty()) ++rows;
-        bool is_exact = (expected > 0 && rows == expected);
-        if (is_exact && !exact) { best = entry.path().string(); best_rows = rows; exact = true; }
-        else if (is_exact && exact && rows > best_rows) { best = entry.path().string(); best_rows = rows; }
-        else if (!exact && rows > best_rows) { best = entry.path().string(); best_rows = rows; }
+    fs::directory_iterator it(folder, ec), end;
+    for (; !ec && it != end; it.increment(ec)) {
+        try {
+            std::error_code fec;
+            if (!it->is_regular_file(fec) || fec) continue;
+            std::string name = it->path().filename().string();
+            if (!detail::wildcard_match(glob, name)) continue;
+            // count rows (cheap: count newlines)
+            std::ifstream f(it->path());
+            long rows = 0; std::string l;
+            while (std::getline(f, l)) if (!l.empty()) ++rows;
+            bool is_exact = (expected > 0 && rows == expected);
+            if (is_exact && !exact) { best = it->path().string(); best_rows = rows; exact = true; }
+            else if (is_exact && exact && rows > best_rows) { best = it->path().string(); best_rows = rows; }
+            else if (!exact && rows > best_rows) { best = it->path().string(); best_rows = rows; }
+        } catch (const std::exception &) {
+            continue;   // a name that is not text here cannot be ours anyway
+        }
     }
     return best;
 }
@@ -283,7 +296,8 @@ inline CameraTimestamps load(const std::string &folder,
         for (const auto &cam : cam_ordered) {
             std::string p = (fs::path(folder) / ("Cam" + cam + "_meta.csv")).string();
             std::vector<int64_t> a, b, c;
-            if (fs::exists(p) && parse_orange_meta(p, a, b, &c)) {
+            std::error_code xec;
+            if (fs::exists(p, xec) && parse_orange_meta(p, a, b, &c)) {
                 ns[cam] = std::move(a); ids[cam] = std::move(b);
                 sys[cam] = std::move(c); ++found;
             }

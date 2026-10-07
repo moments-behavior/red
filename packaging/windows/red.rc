@@ -1,0 +1,9 @@
+// red.exe's icon, compiled into the Windows build (CMakeLists.txt).
+//
+// Named GLFW_ICON because GLFW, creating red's window, loads the icon
+// resource of that name for the title bar and taskbar; Explorer shows the
+// exe's first icon resource, which is this one too.
+//
+// red.ico holds icon.png (repo root) at 16-256 px. Regenerate it if that
+// image changes.
+GLFW_ICON ICON "red.ico"

@@ -19,36 +19,44 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
 
     DrawPanel("Settings", state.show,
         [&]() {
-        bool display_changed = false;
-        bool playback_changed = false;
         bool other_changed = false;
 
         // --- Paths ---
-        if (ImGui::CollapsingHeader("Paths", ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::Text("Default Project Root");
-            if (ImGui::InputText("##proj_root", &s.default_project_root_path))
+        ImGui::SeparatorText("Paths");
+        {
+            // Set: dialogs always start there. Empty: they start in the folder
+            // last used (default_project_root, media_browse_dir).
+            ImGui::Text("Start project dialogs in");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("Open Project and Save Project always start here.\n"
+                                  "Leave empty to start in the folder last used.");
+            if (ImGui::InputTextWithHint("##proj_root", "the folder last used", &s.default_project_root_path))
                 other_changed = true;
             ImGui::SameLine();
             if (ImGui::Button("Browse##proj_root")) {
                 IGFD::FileDialogConfig cfg;
                 cfg.countSelectionMax = 1;
                 cfg.path = s.default_project_root_path.empty()
-                               ? ctx.red_data_dir
+                               ? ctx.default_dir
                                : s.default_project_root_path;
                 cfg.flags = ImGuiFileDialogFlags_Modal;
                 ImGuiFileDialog::Instance()->OpenDialog(
                     "SettingsBrowseProjRoot", "Choose Project Root", nullptr, cfg);
             }
 
-            ImGui::Text("Default Media Root");
-            if (ImGui::InputText("##media_root", &s.default_media_root_path))
+            ImGui::Text("Start media dialogs in");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("Open Videos, Open Images and New Project's Media "
+                                  "Folder always start here.\nLeave empty to start "
+                                  "in the folder last used.");
+            if (ImGui::InputTextWithHint("##media_root", "the folder last used", &s.default_media_root_path))
                 other_changed = true;
             ImGui::SameLine();
             if (ImGui::Button("Browse##media_root")) {
                 IGFD::FileDialogConfig cfg;
                 cfg.countSelectionMax = 1;
                 cfg.path = s.default_media_root_path.empty()
-                               ? ctx.red_data_dir
+                               ? ctx.default_dir
                                : s.default_media_root_path;
                 cfg.flags = ImGuiFileDialogFlags_Modal;
                 ImGuiFileDialog::Instance()->OpenDialog(
@@ -57,11 +65,12 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
         }
 
         // --- Display ---
-        if (ImGui::CollapsingHeader("Display Defaults")) {
+        ImGui::SeparatorText("Display");
+        {
             // Applied live to style.FontScaleMain by the main loop; ImGui 1.92+
             // re-rasterises glyphs at the scaled size, so text stays sharp.
             if (ImGui::SliderFloat("UI Text Size", &s.ui_text_scale,
-                                   0.7f, 2.0f, "%.2fx")) {
+                                   kUiTextScaleMin, kUiTextScaleMax, "%.2fx")) {
                 ImGui::GetStyle().FontScaleMain = s.ui_text_scale;
                 other_changed = true;
             }
@@ -71,16 +80,23 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
                 ImGui::GetStyle().FontScaleMain = 1.0f;
                 other_changed = true;
             }
-            if (ImGui::SliderInt("Brightness", &s.default_brightness, -150, 150))
-                display_changed = true;
-            if (ImGui::SliderFloat("Contrast", &s.default_contrast, 0.0f, 3.0f, "%.2f"))
-                display_changed = true;
-            if (ImGui::Checkbox("Pivot Mid-Gray", &s.default_pivot_midgray))
-                display_changed = true;
+            // Brightness / contrast are adjusted live in the transport bar,
+            // starting neutral each session. How contrast behaves is a
+            // preference, kept here: stretch around mid-gray (darks darker,
+            // lights lighter) or scale from black.
+            if (ImGui::Checkbox("Contrast pivots on mid-gray", &s.default_pivot_midgray)) {
+                ctx.display.pivot_midgray = s.default_pivot_midgray;
+                other_changed = true;
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("On: contrast stretches values away from mid-gray, "
+                                  "keeping overall brightness.\nOff: it scales from "
+                                  "black, so more contrast also brightens.");
         }
 
         // --- Keypoint Colors ---
-        if (ImGui::CollapsingHeader("Keypoint Colors")) {
+        ImGui::SeparatorText("Keypoint Colors");
+        {
             // Colormap for all keypoints. "Rainbow (HSV)" is the legacy
             // default; the rest are ImPlot's built-in matplotlib/MATLAB maps
             // (Viridis, Plasma, Jet, Spectral, ...). Selecting one recolors
@@ -123,55 +139,26 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
                 other_changed = true;
             ImGui::TextDisabled(
                 "Applies to all camera views and the Keypoints table.");
+            // Also in a view's right-click menu, under By reprojection error.
+            float good = s.reproj_good_px, bad = s.reproj_bad_px;
+            ImGui::TextUnformatted("Reprojection error colours");
+            if (reproj_threshold_bar("##reproj_bar_settings", good, bad))
+                set_reproj_thresholds(ctx, good, bad);   // saves
         }
 
         // --- Playback ---
-        if (ImGui::CollapsingHeader("Playback Defaults")) {
-            // Same single control as the transport bar: one question ("how
-            // fast?") rather than a mode checkbox plus a rate slider.
-            struct DefSpeed { const char *label; float speed; bool clock_paced; };
-            static const DefSpeed kDefSpeeds[] = {
-                {"1x (real time)", 1.0f,        true},
-                {"1/2x",           1.0f / 2.0f,  true},
-                {"1/4x",           1.0f / 4.0f,  true},
-                {"1/8x",           1.0f / 8.0f,  true},
-                {"1/16x",          1.0f / 16.0f, true},
-                {"Every frame",    1.0f,         false},
-            };
-            constexpr int kNumDefSpeeds =
-                (int)(sizeof(kDefSpeeds) / sizeof(kDefSpeeds[0]));
-            int def_idx = kNumDefSpeeds - 1;
-            if (s.default_realtime_playback) {
-                float best = 1e9f;
-                for (int i = 0; i < kNumDefSpeeds - 1; ++i) {
-                    float d = fabsf(kDefSpeeds[i].speed - s.default_playback_speed);
-                    if (d < best) { best = d; def_idx = i; }
-                }
-            }
-            if (ImGui::BeginCombo("Playback Speed", kDefSpeeds[def_idx].label)) {
-                for (int i = 0; i < kNumDefSpeeds; ++i) {
-                    if (ImGui::Selectable(kDefSpeeds[i].label, i == def_idx)) {
-                        s.default_realtime_playback = kDefSpeeds[i].clock_paced;
-                        if (kDefSpeeds[i].clock_paced)
-                            s.default_playback_speed = kDefSpeeds[i].speed;
-                        playback_changed = true;
-                    }
-                    if (i == def_idx) ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip(
-                    "1x and the fractions play to the wall clock (accurate "
-                    "timing, skips frames if decoding lags).\n"
-                    "\"Every frame\" shows every decoded frame instead.");
-            ImGui::InputInt("Buffer Size", &s.default_buffer_size);
+        ImGui::SeparatorText("Playback");
+        {
+            // Speed is the transport bar's; every session starts at 1x.
+            if (ImGui::InputInt("Buffer Size", &s.default_buffer_size))
+                other_changed = true;
             // No propagation needed — takes effect on next video load
         }
 
 #ifndef __APPLE__
         // --- Hardware (Linux only) ---
-        if (ImGui::CollapsingHeader("Hardware")) {
+        ImGui::SeparatorText("Hardware");
+        {
             ImGui::Text("Decode backend: %s", red::decode_backend_name());
             ImGui::TextDisabled("(%s)", red::decode_backend_reason());
             // Software decode writes host memory, so render_allocate_scene_memory
@@ -213,53 +200,32 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
         }
 #endif
 
-        // --- Annotation Tools ---
-        if (ImGui::CollapsingHeader("Annotation Tools")) {
-            auto &ac = ctx.pm.annotation_config;
-            ImGui::Checkbox("Keypoints", &ac.enable_keypoints);
-            ImGui::Checkbox("Bounding Boxes", &ac.enable_bboxes);
-            ImGui::Checkbox("Oriented Bounding Boxes", &ac.enable_obbs);
-            ImGui::TextDisabled("Enable tools to show their panels in the Tools menu.");
-        }
-
-        // --- Export ---
-        if (ImGui::CollapsingHeader("JARVIS Export Defaults")) {
-            if (ImGui::SliderFloat("Bbox Margin (px)", &s.jarvis_margin, 0.0f, 200.0f))
-                other_changed = true;
-            if (ImGui::SliderFloat("Train Ratio", &s.jarvis_train_ratio, 0.5f, 0.99f))
-                other_changed = true;
-            if (ImGui::InputInt("Random Seed", &s.jarvis_seed))
-                other_changed = true;
-            if (ImGui::SliderInt("JPEG Quality", &s.jarvis_jpeg_quality, 10, 100))
-                other_changed = true;
-        }
-
         ImGui::Separator();
 
-        if (ImGui::Button("Save")) {
-            save_user_settings(s);
-        }
-        ImGui::SameLine();
+        // Back to the defaults for what this window shows -- not the things
+        // red remembers for you (recent projects, last folders, the Export
+        // window's values) nor the start folders chosen above.
         if (ImGui::Button("Reset to Defaults")) {
-            UserSettings defaults;
-            defaults.default_project_root_path = s.default_project_root_path;
-            defaults.default_media_root_path = s.default_media_root_path;
-            s = defaults;
+            const UserSettings d;
+            s.ui_text_scale = d.ui_text_scale;
+            ImGui::GetStyle().FontScaleMain = s.ui_text_scale;
+            s.default_pivot_midgray = d.default_pivot_midgray;
+            ctx.display.pivot_midgray = s.default_pivot_midgray;
+            s.keypoint_colormap = d.keypoint_colormap;
             g_keypoint_colormap = s.keypoint_colormap;
             apply_keypoint_colormap(ctx.skeleton, g_keypoint_colormap);
-            display_changed = playback_changed = other_changed = true;
+            s.active_keypoint_color = d.active_keypoint_color;
+            set_reproj_thresholds(ctx, d.reproj_good_px, d.reproj_bad_px);
+            s.default_buffer_size = d.default_buffer_size;
+            if (s.use_cpu_buffer != d.use_cpu_buffer && ctx.scene &&
+                d.use_cpu_buffer != ctx.scene->use_cpu_buffer)
+                ctx.popups.pushInfo("Restart Required",
+                    "Buffer Type changes take effect after restarting red.");
+            s.use_cpu_buffer = d.use_cpu_buffer;
+            other_changed = true;
         }
-        // Propagate only the sections that actually changed (no auto-save;
-        // user presses "Save" explicitly to persist to disk)
-        if (display_changed) {
-            ctx.display.brightness = s.default_brightness;
-            ctx.display.contrast = s.default_contrast;
-            ctx.display.pivot_midgray = s.default_pivot_midgray;
-        }
-        if (playback_changed) {
-            ctx.ps.set_playback_speed = s.default_playback_speed;
-            ctx.ps.realtime_playback = s.default_realtime_playback;
-        }
+        // Every change is saved as it is made: no Save button.
+        if (other_changed) save_user_settings(s);
         },
         [&]() {
         // File dialog handlers
@@ -282,5 +248,5 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
             ImGuiFileDialog::Instance()->Close();
         }
         },
-        ImVec2(500, 500));
+        ImVec2(520, 720));   // every section shows, so room for them all
 }

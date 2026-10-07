@@ -26,10 +26,21 @@ macro(red_resolve_cuda)
         include(CheckLanguage)
         check_language(CUDA)
         if(NOT CMAKE_CUDA_COMPILER)
+            if(WIN32)
+                set(RED_BUILD_CMD ".\\build.bat")
+            else()
+                set(RED_BUILD_CMD "./build.sh")
+            endif()
+            # A toolkit that is installed but too old for the host compiler
+            # fails here the same way a missing one does: nvcc refuses any MSVC
+            # or GCC newer than it knows about, and check_language() only
+            # reports that it found nothing.
             message(FATAL_ERROR
-                "No CUDA compiler found, but the CUDA path is enabled.\n"
-                "  Install the CUDA Toolkit, or build the software-decode path:\n"
-                "      ./build.sh -DRED_ENABLE_CUDA=OFF")
+                "No usable CUDA compiler found, but the CUDA path is enabled.\n"
+                "  Either the CUDA Toolkit is missing, or it is too old for this\n"
+                "  host compiler -- nvcc rejects a newer MSVC/GCC than it supports.\n"
+                "  Install or update the CUDA Toolkit, or build the software-decode path:\n"
+                "      ${RED_BUILD_CMD} -DRED_ENABLE_CUDA=OFF")
         endif()
         set(RED_CUDA ON)
     else()
@@ -37,6 +48,70 @@ macro(red_resolve_cuda)
         message(STATUS "CUDA disabled -- building the software-decode path only")
     endif()
 endmacro()
+
+# Detect Arrow/Parquet for the tailcycle-dataset exporter. Must be called after
+# project(), like red_resolve_cuda -- Arrow's config does find_dependency(Threads),
+# which needs a language enabled.
+#
+# red is built as C++20 because Arrow's public headers require it: arrow/buffer.h
+# uses std::span. Without Arrow, red still builds -- the exporter compiles to a
+# stub whose available() returns false and the GUI hides the window, the same
+# shape as the RED_ENABLE_CUDA gate.
+macro(red_resolve_parquet)
+    find_package(Arrow CONFIG QUIET)
+    find_package(Parquet CONFIG QUIET)
+    if(Arrow_FOUND AND Parquet_FOUND)
+        message(STATUS "Arrow ${Arrow_VERSION} found -- tailcycle export enabled")
+    else()
+        message(STATUS "Arrow/Parquet not found -- tailcycle export disabled")
+    endif()
+endmacro()
+
+# tracktail forward tracker (src/tracktail_*.h): an HTTP client for the
+# tracktail server, built on cpp-httplib (submodule) + vendored miniz.
+set(DIR_HTTPLIB "${CMAKE_SOURCE_DIR}/lib/httplib")
+set(DIR_MINIZ   "${CMAKE_SOURCE_DIR}/lib/miniz")
+set(MINIZ_SRC   "${DIR_MINIZ}/miniz.c")   # C source: project() lists C below
+
+# ImGuiFileDialog reads red's settings (src/gui/igfd_config.h) in place of its own.
+add_compile_definitions(CUSTOM_IMGUIFILEDIALOG_CONFIG="${CMAKE_SOURCE_DIR}/src/gui/igfd_config.h")
+
+# red's version, shown in Help > About: a release tag when the build is exactly
+# at one, else <branch>-<commit>, with -dirty for uncommitted changes -- the
+# same names the packaging scripts give their zips. Taken at configure time;
+# build.sh and build.bat configure on every run.
+set(RED_VERSION "unknown")
+find_program(RED_GIT git)
+if(RED_GIT)
+    execute_process(COMMAND ${RED_GIT} describe --tags --exact-match
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                    OUTPUT_VARIABLE _red_tag RESULT_VARIABLE _red_rc
+                    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(_red_rc EQUAL 0)
+        set(RED_VERSION "${_red_tag}")
+    else()
+        execute_process(COMMAND ${RED_GIT} rev-parse --abbrev-ref HEAD
+                        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                        OUTPUT_VARIABLE _red_branch
+                        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        execute_process(COMMAND ${RED_GIT} rev-parse --short HEAD
+                        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                        OUTPUT_VARIABLE _red_commit
+                        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        string(REPLACE "/" "-" _red_branch "${_red_branch}")
+        if(_red_commit)
+            set(RED_VERSION "${_red_branch}-${_red_commit}")
+        endif()
+    endif()
+    execute_process(COMMAND ${RED_GIT} diff --quiet HEAD --
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                    RESULT_VARIABLE _red_dirty ERROR_QUIET)
+    if(NOT _red_dirty EQUAL 0 AND NOT RED_VERSION STREQUAL "unknown")
+        set(RED_VERSION "${RED_VERSION}-dirty")
+    endif()
+endif()
+message(STATUS "red version: ${RED_VERSION}")
+add_compile_definitions("RED_VERSION=\"${RED_VERSION}\"")
 
 # Default to an optimized build. Without this the build type is empty and the
 # compiler runs at -O0, which cripples hot host loops (e.g. the HybridNet
@@ -48,7 +123,8 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 if(APPLE)
-    project(red LANGUAGES CXX OBJCXX)
+    project(red LANGUAGES C CXX OBJCXX)
+    red_resolve_parquet()
 
     # Where the macOS dependencies live (Eigen, FFmpeg, GLFW, Ceres,
     # turbojpeg). No package manager is required -- any prefix CMake can search
@@ -118,6 +194,7 @@ if(APPLE)
         ${MM_SRC_FILES}
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
+        ${MINIZ_SRC}   # tracktail server NPZ decode
     )
 
     target_include_directories(red PRIVATE
@@ -126,6 +203,8 @@ if(APPLE)
         ${DIR_IMGUI}/backends
         ${DIR_IMPLOT}
         ${DIR_FILEBROWSER}
+        ${DIR_HTTPLIB}
+        ${DIR_MINIZ}
         lib/nvcodec
         lib/IconFontCppHeaders
         ${FFMPEG_INCLUDE_DIRS}
@@ -168,7 +247,7 @@ if(APPLE)
     )
 
     set_target_properties(red PROPERTIES
-        CXX_STANDARD 17
+        CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
     )
 
@@ -225,7 +304,7 @@ if(APPLE)
 
 
     set_target_properties(test_gui PROPERTIES
-        CXX_STANDARD 17
+        CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
     )
 
@@ -267,7 +346,7 @@ if(APPLE)
         pthread
     )
     set_target_properties(test_annotation PROPERTIES
-        CXX_STANDARD 17
+        CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
     )
 
@@ -311,7 +390,7 @@ if(APPLE)
         pthread
     )
     set_target_properties(test_decoder PROPERTIES
-        CXX_STANDARD 17
+        CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
     )
 
@@ -319,7 +398,7 @@ if(APPLE)
     add_executable(test_sync_plan tests/test_sync_plan.cpp)
     target_include_directories(test_sync_plan PRIVATE src)
     set_target_properties(test_sync_plan PROPERTIES
-        CXX_STANDARD 17
+        CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
     )
 
@@ -372,7 +451,7 @@ if(APPLE)
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
     set_target_properties(test_nerfstudio_export PROPERTIES
-        CXX_STANDARD 17
+        CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
     )
 
@@ -434,14 +513,16 @@ if(APPLE)
 
 elseif(WIN32)
     # Windows build with NVIDIA CUDA support (RTX 3090)
-    project(red LANGUAGES CXX)
+    # RC: the resource compiler, for red.exe's icon (packaging/windows/red.rc).
+    project(red LANGUAGES C CXX RC)
     red_resolve_cuda()
+    red_resolve_parquet()
     if(RED_CUDA)
         enable_language(CUDA)
         # CUDA architecture: 86 for RTX 3090 (Ampere)
         set(CMAKE_CUDA_ARCHITECTURES 86)
     endif()
-    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD 20)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
     # No vcpkg auto-detection here: CMAKE_TOOLCHAIN_FILE is only read during
@@ -551,11 +632,18 @@ elseif(WIN32)
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
         ${CUDA_SRC_FILES}
+        ${MINIZ_SRC}   # tracktail server NPZ decode
+        ${CMAKE_SOURCE_DIR}/packaging/windows/red.rc   # exe + window icon
     )
 
 
 
-    target_compile_definitions(red PRIVATE NOMINMAX _USE_MATH_DEFINES)
+    # WIN32_LEAN_AND_MEAN: without it <windows.h> also includes the old
+    # <winsock.h>, which clashes with the <winsock2.h> cpp-httplib needs
+    # (redefinition of sockaddr, fd_set, accept, ...) wherever windows.h comes
+    # first -- red.cpp includes it directly. red uses nothing it leaves out;
+    # utils.cpp includes <shlobj.h> for SHGetKnownFolderPath itself.
+    target_compile_definitions(red PRIVATE NOMINMAX _USE_MATH_DEFINES WIN32_LEAN_AND_MEAN)
     if(NOT RED_CUDA)
         target_compile_definitions(red PRIVATE RED_NO_CUDA)
     endif()
@@ -573,6 +661,8 @@ elseif(WIN32)
         ${DIR_FILEBROWSER}
         ${DIR_ICONFONT}
         ${DIR_NVCODEC}
+        ${DIR_HTTPLIB}
+        ${DIR_MINIZ}
         ${CUDA_DIR}/include
         ${FFMPEG_INCLUDE_DIRS}
     )
@@ -591,6 +681,8 @@ elseif(WIN32)
         opengl32
         # CUDA + bundled NVDEC (empty without RED_ENABLE_CUDA)
         ${RED_CUDA_LIBS}
+        # WinSock for cpp-httplib (tracktail server client)
+        ws2_32
     )
 
     # FFmpeg libraries
@@ -621,7 +713,7 @@ elseif(WIN32)
     # vcpkg automatically copies dependent DLLs via its toolchain
 
     set_target_properties(red PROPERTIES
-        CXX_STANDARD 17
+        CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
     )
 
@@ -637,7 +729,7 @@ elseif(WIN32)
             ${CUDA_SRC_FILES}
             tests/${TEST_NAME}.cpp
         )
-        target_compile_definitions(${TEST_NAME} PRIVATE NOMINMAX _USE_MATH_DEFINES)
+        target_compile_definitions(${TEST_NAME} PRIVATE NOMINMAX _USE_MATH_DEFINES WIN32_LEAN_AND_MEAN)
         if(NOT RED_CUDA)
             target_compile_definitions(${TEST_NAME} PRIVATE RED_NO_CUDA)
         endif()
@@ -678,7 +770,7 @@ elseif(WIN32)
             target_link_libraries(${TEST_NAME} PRIVATE ${TURBOJPEG_LIB})
         endif()
         set_target_properties(${TEST_NAME} PROPERTIES
-            CXX_STANDARD 17
+            CXX_STANDARD 20
             CXX_STANDARD_REQUIRED ON
         )
     endforeach()
@@ -701,8 +793,9 @@ else()
     # links read-only against those shared installs.
     # No OpenCV, no LibTorch.
     # ────────────────────────────────────────────────────────────────────────
-    project(red LANGUAGES CXX)
+    project(red LANGUAGES C CXX)
     red_resolve_cuda()
+    red_resolve_parquet()
     if(RED_CUDA)
         enable_language(CUDA)
         # CUDA arch: 86 = A16 (Ampere), 89 = RTX 4000 Ada. Override with
@@ -710,8 +803,14 @@ else()
         if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
             set(CMAKE_CUDA_ARCHITECTURES 86 89)
         endif()
+        # The .cu files are plain C++17. Without this, CXX_STANDARD 20 below
+        # propagates to them as "CUDA20", which CMake < 3.24 cannot translate
+        # into an nvcc flag and configure fails.
+        if(NOT DEFINED CMAKE_CUDA_STANDARD)
+            set(CMAKE_CUDA_STANDARD 17)
+        endif()
     endif()
-    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD 20)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
     # System packages (apt / distro)
@@ -740,9 +839,12 @@ else()
     message(STATUS "Using CBLAS provider: ${RED_CBLAS_LIB}")
 
     # FFmpeg via pkg-config — prefer the custom CUDA-enabled build at
-    # $HOME/nvidia/ffmpeg (shared with orange) over any system FFmpeg.
+    # $HOME/nvidia/ffmpeg (shared with orange) over any system FFmpeg, but
+    # only for a CUDA build: that is what it exists for. A software-decode
+    # build is what gets packaged for download, and must carry the system's
+    # FFmpeg, not a private one built for this machine.
     set(RED_FFMPEG_PKGCONFIG "$ENV{HOME}/nvidia/ffmpeg/build/lib/pkgconfig")
-    if(EXISTS "${RED_FFMPEG_PKGCONFIG}")
+    if(RED_CUDA AND EXISTS "${RED_FFMPEG_PKGCONFIG}")
         set(ENV{PKG_CONFIG_PATH} "${RED_FFMPEG_PKGCONFIG}:$ENV{PKG_CONFIG_PATH}")
         message(STATUS "Using custom FFmpeg from ${RED_FFMPEG_PKGCONFIG}")
     endif()
@@ -802,6 +904,7 @@ else()
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
         ${CUDA_SRC_FILES}
+        ${MINIZ_SRC}   # tracktail server NPZ decode
     )
 
 
@@ -821,6 +924,8 @@ else()
         ${DIR_FILEBROWSER}
         ${DIR_ICONFONT}
         ${DIR_NVCODEC}
+        ${DIR_HTTPLIB}
+        ${DIR_MINIZ}
     )
 
     # Link libraries
@@ -838,7 +943,6 @@ else()
         ${CMAKE_DL_LIBS}
     )
 
-
     # RPATH: isolate bundled ML libs from system / orange's toolchain.
     # $ORIGIN so the installed binary finds them relative to itself; build
     # rpath points at the absolute bundle paths for running from build/.
@@ -846,7 +950,7 @@ else()
     set(RED_RPATH_INSTALL "$ORIGIN")
 
     set_target_properties(red PROPERTIES
-        CXX_STANDARD 17
+        CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
         BUILD_RPATH "${RED_RPATH_BUILD}"
         INSTALL_RPATH "${RED_RPATH_INSTALL}"
@@ -898,7 +1002,7 @@ else()
             ${CMAKE_DL_LIBS}
         )
         set_target_properties(${TEST_NAME} PROPERTIES
-            CXX_STANDARD 17
+            CXX_STANDARD 20
             CXX_STANDARD_REQUIRED ON
             BUILD_RPATH "${RED_RPATH_BUILD}"
             INSTALL_RPATH "${RED_RPATH_INSTALL}"
@@ -912,3 +1016,34 @@ else()
 endif()
 
 
+
+
+# Link the optional tailcycle export into red (detection is near the top).
+#
+# Defined here rather than inside the platform blocks because it is identical
+# on all three: if() creates no scope in CMake, so everything they found is
+# still visible. The test target deliberately does NOT join the per-platform
+# test loops -- those link the whole of red (GUI, ImGui, CUDA, FFmpeg) and this
+# test needs none of it. Eigen and Arrow are the entire dependency set.
+if(Arrow_FOUND AND Parquet_FOUND)
+    target_compile_definitions(red PRIVATE RED_HAVE_PARQUET)
+    target_link_libraries(red PRIVATE Arrow::arrow_shared Parquet::parquet_shared)
+
+    add_executable(test_tailcycle_export
+        ${CMAKE_SOURCE_DIR}/tests/test_tailcycle_export.cpp
+        ${CMAKE_SOURCE_DIR}/src/tailcycle_export.cpp
+        ${CMAKE_SOURCE_DIR}/src/tailcycle_import.cpp
+    )
+    target_include_directories(test_tailcycle_export PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_definitions(test_tailcycle_export PRIVATE RED_HAVE_PARQUET)
+    target_link_libraries(test_tailcycle_export PRIVATE
+        Eigen3::Eigen
+        Arrow::arrow_shared
+        Parquet::parquet_shared
+        Threads::Threads
+    )
+    set_target_properties(test_tailcycle_export PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+    )
+endif()

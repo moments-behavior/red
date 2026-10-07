@@ -10,6 +10,11 @@ struct UserSettings {
     // Paths
     std::string default_project_root_path;
     std::string default_media_root_path;
+    // Remembered, not set by hand: where the last project was created and the
+    // last skeleton .json picked or saved, so the next dialog starts there.
+    std::string last_project_root;
+    std::string last_skeleton_dir;
+    std::string last_media_dir;   // where videos/images were last opened from
 
     // Display defaults
     // UI text scale. ImGui 1.92+ re-rasterises at the scaled size, so this is
@@ -18,6 +23,9 @@ struct UserSettings {
     int default_brightness = 0;
     float default_contrast = 1.0f;
     bool default_pivot_midgray = true;
+    // Reprojection-error colours (px): green up to good, yellow up to bad.
+    float reproj_good_px = 2.0f;
+    float reproj_bad_px = 5.0f;
 
     // Playback defaults
     float default_playback_speed = 1.0f;
@@ -53,6 +61,8 @@ struct UserSettings {
     std::vector<float> active_keypoint_color = {1.0f, 1.0f, 1.0f};
 
     // Export defaults
+    // The Export window's last-used values, for every format (named jarvis_*
+    // from when they were JARVIS-only defaults; kept for existing files).
     float jarvis_margin = 50.0f;
     float jarvis_train_ratio = 0.9f;
     int jarvis_seed = 42;
@@ -79,7 +89,12 @@ inline void to_json(nlohmann::json &j, const UserSettings &s) {
     j = nlohmann::json{
         {"default_project_root_path", s.default_project_root_path},
         {"default_media_root_path", s.default_media_root_path},
+        {"last_project_root", s.last_project_root},
+        {"last_skeleton_dir", s.last_skeleton_dir},
+        {"last_media_dir", s.last_media_dir},
         {"ui_text_scale", s.ui_text_scale},
+        {"reproj_good_px", s.reproj_good_px},
+        {"reproj_bad_px", s.reproj_bad_px},
         {"default_brightness", s.default_brightness},
         {"default_contrast", s.default_contrast},
         {"default_pivot_midgray", s.default_pivot_midgray},
@@ -102,7 +117,12 @@ inline void from_json(const nlohmann::json &j, UserSettings &s) {
         j.value("default_project_root_path", std::string{});
     s.default_media_root_path =
         j.value("default_media_root_path", std::string{});
+    s.last_project_root = j.value("last_project_root", std::string{});
+    s.last_skeleton_dir = j.value("last_skeleton_dir", std::string{});
+    s.last_media_dir = j.value("last_media_dir", std::string{});
     s.ui_text_scale = j.value("ui_text_scale", 1.0f);
+    s.reproj_good_px = j.value("reproj_good_px", 2.0f);
+    s.reproj_bad_px = j.value("reproj_bad_px", 5.0f);
     s.default_brightness = j.value("default_brightness", 0);
     s.default_contrast = j.value("default_contrast", 1.0f);
     s.default_pivot_midgray = j.value("default_pivot_midgray", true);
@@ -119,6 +139,23 @@ inline void from_json(const nlohmann::json &j, UserSettings &s) {
     s.jarvis_seed = j.value("jarvis_seed", 42);
     s.jarvis_jpeg_quality = j.value("jarvis_jpeg_quality", 95);
     s.recent_projects = j.value("recent_projects", std::vector<std::string>{});
+}
+
+// Where project dialogs start (Open Project, Save Project): the Settings
+// folder when one is set -- a fixed place, chosen -- else the folder last used
+// for a project, else `fallback` (home). The same rule as media dialogs
+// (media_browse_dir). Read when a dialog opens, so a Settings change applies
+// at once.
+inline std::string default_project_root(const UserSettings &s,
+                                        const std::string &fallback) {
+    std::error_code ec;
+    if (!s.default_project_root_path.empty() &&
+        std::filesystem::is_directory(s.default_project_root_path, ec))
+        return s.default_project_root_path;
+    if (!s.last_project_root.empty() &&
+        std::filesystem::is_directory(s.last_project_root, ec))
+        return s.last_project_root;
+    return fallback;
 }
 
 inline std::filesystem::path user_settings_path() {

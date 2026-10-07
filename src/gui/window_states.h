@@ -1,10 +1,12 @@
 #pragma once
 #include "gui/labeling_tool_window.h"
 #include "gui/annotation_dialog.h"
+#include "gui/skeleton_creator_window.h"
 #include "gui/settings_window.h"
 #include "gui/transport_bar.h"
 #include "gui/jarvis_export_window.h"
 #include "gui/jarvis_import_window.h"
+#include "gui/tailcycle_open_window.h"
 #include "gui/pose_stats_window.h"
 #include "gui/frame_drops_window.h"
 #include "gui/export_window.h"
@@ -14,16 +16,19 @@
 #include "gui/midline_tool.h"
 #include "gui/triangulation_diagnostics_window.h"
 #include "gui/switch_skeleton_window.h"
+#include "gui/tracktail_window.h"
 #include <string>
 
 // Bundle of all tool-window states.
 struct WindowStates {
+    SkeletonCreatorState skeleton_creator;
     LabelingToolState labeling;
     AnnotationDialogState annotation;
     SettingsState settings;
     TransportBarState transport;
     JarvisExportState jarvis_export;
     JarvisImportState jarvis_import;
+    TailcycleOpenState tailcycle_open;
     PoseStatsState pose_stats;
     FrameDropsState frame_drops;
     ExportWindowState export_win;
@@ -33,17 +38,25 @@ struct WindowStates {
     MidlineToolState midline;
     TriangulationDiagnosticsState triangulation_diag;
     SwitchSkeletonState switch_skeleton;
+    TracktailWindowState tracktail;
     bool show_help = false;
+    bool show_about = false;   // Help > About Red (a modal, drawn by HandleMainMenuDialogs)
+    bool about_open = false;   // its title bar x: ImGui clears this to close it
     // Set by the Welcome window's Recent Projects list; consumed by the
     // main loop, which has the load callbacks in scope.
     std::string load_project_request;
+    // With load_project_request: reopen WITHOUT saving labels first.
+    // Project > Camera Timestamps: the folder picked, waiting for the user to
+    // confirm saving labels and reloading the project with it.
+    std::string timestamps_pending;
+    bool timestamps_confirm = false;
 
     // Reset all tool window state for project switching.
     // Waits on async futures, joins threads, clears all project-specific data.
     void reset() {
         labeling = LabelingToolState{};
         annotation.show = false;
-        annotation.video_folder.clear();
+        annotation.media_folder.clear();
         annotation.discovered_cameras.clear();
         annotation.camera_selected.clear();
         annotation.status.clear();
@@ -69,10 +82,8 @@ struct WindowStates {
         export_win.include_video_index = false;
         export_win.status.clear();
         export_win.output_dir.clear();
-        export_win.margin = 50.0f;
-        export_win.train_ratio = 0.9f;
-        export_win.seed = 42;
-        export_win.jpeg_quality = 95;
+        // margin / train_ratio / seed / jpeg_quality are kept: the last
+        // used, remembered across projects (saved at each export).
         export_win.in_progress.store(false);
         export_win.images_saved.store(0);
         export_win.images_total = 0;
@@ -94,12 +105,16 @@ struct WindowStates {
         group_export.finished.store(false);
         group_export.finished_status.reset();
         bbox.show = false;
-        bbox.enabled = false;
+        bbox.enabled = true;   // the default, as at startup
         bbox.drawing = false;
-        bbox.class_names.clear();
-        bbox.class_colors.clear();
+        bbox.drawing_cam = -1;
+        bbox.resizing = false;
+        bbox.edge_mask = 0;
+        bbox.edge_cam = -1;
+        bbox.menu_cam = -1;
+        bbox.open_menu = false;
+        bbox.editing_class = -1;
         bbox.current_class = 0;
-        bbox.current_instance = 0;
         obb.show = false;
         obb.enabled = false;
         obb.draw_state = OBBDrawState::Idle;
@@ -108,6 +123,14 @@ struct WindowStates {
         midline = MidlineToolState{};
         triangulation_diag = TriangulationDiagnosticsState{};
         switch_skeleton = SwitchSkeletonState{};
+        // tracktail: keep the server URL (it is per-workstation, not
+        // per-project); drop everything derived from the project.
+        tracktail.show = false;
+        tracktail.forward_requested = false;
+        tracktail.staging = false;  // drops a request waiting for frames
+        tracktail.server_probe_requested = false;
+        tracktail.last_result.clear();
+        tracktail.server_status.clear();
         show_help = false;
         load_project_request.clear();
     }
