@@ -1,0 +1,26 @@
+; nvcuvid.dll's exports that Red links against, for Windows CUDA builds.
+;
+; The NVDEC decoder is nvcuvid.dll, which comes with the NVIDIA driver. To link
+; against it MSVC needs an import library; rather than ship NVIDIA's (the Video
+; Codec SDK's licence does not allow redistributing it), the build makes one
+; from this list with lib.exe /def (CMakeLists.txt). The names are the
+; functions nvcuvid.h and cuviddec.h declare for decoding and parsing; on
+; 64-bit, cuvidMapVideoFrame and cuvidUnmapVideoFrame are macros for the *64
+; names. Add a name here if Red starts calling another cuvid function.
+LIBRARY nvcuvid.dll
+EXPORTS
+    cuvidCreateDecoder
+    cuvidCreateVideoParser
+    cuvidCtxLock
+    cuvidCtxLockCreate
+    cuvidCtxLockDestroy
+    cuvidCtxUnlock
+    cuvidDecodePicture
+    cuvidDestroyDecoder
+    cuvidDestroyVideoParser
+    cuvidGetDecodeStatus
+    cuvidGetDecoderCaps
+    cuvidMapVideoFrame64
+    cuvidParseVideoData
+    cuvidReconfigureDecoder
+    cuvidUnmapVideoFrame64

@@ -601,20 +601,30 @@ elseif(WIN32)
             "${CUDA_DIR}/lib/x64/nppidei.lib"
             "${CUDA_DIR}/lib/x64/nppig.lib"
             "${CUDA_DIR}/lib/x64/nppial.lib"
-            "${DIR_NVCODEC}/x64/nvcuvid.lib"
-            "${DIR_NVCODEC}/x64/nvencodeapi.lib"
+            # nvcuvid.dll's import library, made from lib/nvcodec/nvcuvid.def
+            # below: NVIDIA's own (Video Codec SDK) may not be redistributed.
+            "${CMAKE_BINARY_DIR}/nvcuvid.lib"
             # Required by /DELAYLOAD below.
             delayimp.lib
         )
+        # lib.exe is CMAKE_AR under MSVC. Every target that links
+        # RED_CUDA_LIBS depends on red_nvcuvid_implib, so it exists first.
+        add_custom_command(
+            OUTPUT "${CMAKE_BINARY_DIR}/nvcuvid.lib"
+            COMMAND "${CMAKE_AR}" /nologo /machine:x64
+                    "/def:${DIR_NVCODEC}/nvcuvid.def"
+                    "/out:${CMAKE_BINARY_DIR}/nvcuvid.lib"
+            DEPENDS "${DIR_NVCODEC}/nvcuvid.def"
+            COMMENT "Import library for nvcuvid.dll"
+            VERBATIM)
+        add_custom_target(red_nvcuvid_implib DEPENDS "${CMAKE_BINARY_DIR}/nvcuvid.lib")
         # nvcuda.dll and nvcuvid.dll ship with the NVIDIA driver, not with the
         # app. Delay-loading them means a machine with no driver still reaches
         # main(), where decode_backend() probes and falls back to FFmpeg --
         # without this the loader fails first and the app vanishes with no
         # message at all.
         #
-        # nvEncodeAPI64.dll is deliberately absent: nvencodeapi.lib is on the
-        # link line but no NVENC symbol is referenced anywhere in src/, so no
-        # import is emitted and naming it here would only earn an LNK4199.
+        # No NVENC: Red encodes nothing, so nothing links nvEncodeAPI64.dll.
         set(RED_DELAYLOAD_OPTS
             /DELAYLOAD:nvcuda.dll
             /DELAYLOAD:nvcuvid.dll
@@ -635,6 +645,9 @@ elseif(WIN32)
         ${MINIZ_SRC}   # tracktail server NPZ decode
         ${CMAKE_SOURCE_DIR}/packaging/windows/red.rc   # exe + window icon
     )
+    if(RED_CUDA)
+        add_dependencies(red red_nvcuvid_implib)
+    endif()
 
 
 
@@ -732,6 +745,8 @@ elseif(WIN32)
         target_compile_definitions(${TEST_NAME} PRIVATE NOMINMAX _USE_MATH_DEFINES WIN32_LEAN_AND_MEAN)
         if(NOT RED_CUDA)
             target_compile_definitions(${TEST_NAME} PRIVATE RED_NO_CUDA)
+        else()
+            add_dependencies(${TEST_NAME} red_nvcuvid_implib)
         endif()
         target_compile_options(${TEST_NAME} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/bigobj /EHsc>)
         target_include_directories(${TEST_NAME} PRIVATE
