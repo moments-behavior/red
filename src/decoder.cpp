@@ -4,9 +4,6 @@
 #include "global.h"
 #include "sw_decoder.h"
 #include "sync_plan.h"
-#if defined(RED_HAVE_CUDA)
-#include "AppDecUtils.h"
-#endif
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"  // all platforms: PNG/non-JPEG fallback
 #if defined(__APPLE__) || defined(_WIN32)
 #include <turbojpeg.h>
@@ -15,6 +12,8 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
+#include <iostream>
+#include <sstream>
 
 void decoder_clear_buffer_with_constant_image(unsigned char *image_pt,
                                               int width, int height) {
@@ -56,6 +55,21 @@ inline void decoder_check_input_files(const char *sz_in_file_path) {
 }
 
 #if defined(RED_HAVE_CUDA)
+
+// A CUDA context on GPU `gpu`, for one decoder thread. CUDA 13 added a
+// context-parameters argument to cuCtxCreate.
+static void create_cuda_context(CUcontext *ctx, int gpu, unsigned int flags) {
+    CUdevice dev = 0;
+    ck(cuDeviceGet(&dev, gpu));
+    char name[256] = {};
+    ck(cuDeviceGetName(name, sizeof(name), dev));
+    std::cout << "GPU in use: " << name << std::endl;
+#if CUDA_VERSION >= 13000
+    ck(cuCtxCreate(ctx, nullptr, flags, dev));
+#else
+    ck(cuCtxCreate(ctx, flags, dev));
+#endif
+}
 
 // Seek diagnostics. Off unless RED_SEEK_DEBUG=1 is set in the environment, so
 // this can sit in a build without flooding normal runs.
@@ -103,7 +117,7 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
     CUdeviceptr pTmpImage = 0;
     ck(cuInit(0));
     CUcontext cuContext = NULL;
-    createCudaContext(&cuContext, dc_context->gpu_index, 0);
+    create_cuda_context(&cuContext, dc_context->gpu_index, 0);
     size_t nVideoBytes = 0;
     PacketData pktinfo;
 

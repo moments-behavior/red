@@ -11,7 +11,7 @@ licence, all in this folder:
   vendored/        code compiled into red: Dear ImGui, ImPlot,
                    ImGuiFileDialog (with dirent and stb), cpp-httplib, miniz,
                    IconFontCppHeaders, JSON for Modern C++, stb_image_write,
-                   NVIDIA's FFmpegDemuxer
+                   NVIDIA's FFmpegDemuxer and Video Codec SDK sample classes
   fonts.txt        the fonts in fonts/: Roboto, Font Awesome, Fork Awesome
   third_party/     the shared libraries shipped beside red (FFmpeg, Apache
                    Arrow, Ceres, ...), one folder each with that library's
