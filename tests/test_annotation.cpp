@@ -759,18 +759,18 @@ static void test_bbox_classes_and_target() {
     EXPECT_FALSE(amap[9][0].cameras[0].has_bbox());   // not carried over
     // Every instance labelled anywhere: the frame with the most first, in
     // its order, then the rest by id; an empty instance does not count.
-    AnnotationMap near;
-    get_or_create_frame(near, 3, 3, 2, 5);            // empty instance 5: skipped
-    get_or_create_frame(near, 0, 3, 2, 4).cameras[0].get_extras().absent = true;
-    get_or_create_frame(near, 6, 3, 2, 9).cameras[0].get_extras().absent = true;
-    get_or_create_frame(near, 6, 3, 2, 2).cameras[0].get_extras().absent = true;
-    const auto roster = instance_roster(near);
+    AnnotationMap spread;
+    get_or_create_frame(spread, 3, 3, 2, 5);            // empty instance 5: skipped
+    get_or_create_frame(spread, 0, 3, 2, 4).cameras[0].get_extras().absent = true;
+    get_or_create_frame(spread, 6, 3, 2, 9).cameras[0].get_extras().absent = true;
+    get_or_create_frame(spread, 6, 3, 2, 2).cameras[0].get_extras().absent = true;
+    const auto roster = instance_roster(spread);
     EXPECT_EQ((int)roster.size(), 3);
     EXPECT_TRUE(roster.size() == 3 && roster[0].first == 9 && roster[1].first == 2 &&
                 roster[2].first == 4);
     active = 1;
-    EXPECT_EQ(box_target(near, 4, 0, active, 3, 2, has_box).instance_id, 2);
-    EXPECT_EQ((int)near[4].size(), 3);
+    EXPECT_EQ(box_target(spread, 4, 0, active, 3, 2, has_box).instance_id, 2);
+    EXPECT_EQ((int)spread[4].size(), 3);
     // With no labelled frame anywhere, just instance 0.
     AnnotationMap lone;
     get_or_create_frame(lone, 2, 3, 2, 5);            // empty instance 5
