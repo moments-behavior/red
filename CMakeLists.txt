@@ -865,6 +865,10 @@ else()
     endif()
     pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
         libavcodec libavformat libavutil libswscale)
+    # Export JPEGs. stb_image_write took ~220 ms a 7 MP frame against
+    # turbojpeg's ~18 -- nine tenths of a tailcycle export's time.
+    # Ubuntu: libturbojpeg0-dev.
+    pkg_check_modules(TURBOJPEG REQUIRED IMPORTED_TARGET libturbojpeg)
 
     # Bundled third-party sources
     set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
@@ -951,6 +955,7 @@ else()
         GLEW::GLEW
         OpenGL::GL
         PkgConfig::FFMPEG
+        PkgConfig::TURBOJPEG
         ${RED_CUDA_LIBS}
         # cblas: used by descriptor_matcher.h on non-Windows/non-Mac
         ${RED_CBLAS_LIB}
@@ -1011,6 +1016,7 @@ else()
             GLEW::GLEW
             OpenGL::GL
             PkgConfig::FFMPEG
+            PkgConfig::TURBOJPEG
             ${RED_CUDA_LIBS}
             ${RED_CBLAS_LIB}
             Threads::Threads

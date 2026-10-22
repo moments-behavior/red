@@ -199,23 +199,29 @@ class FrameReader {
         // Decode frames until we reach the target frame number
         while (true) {
             int ret = av_read_frame(fmt_ctx_, pkt_);
-            if (ret < 0)
-                return nullptr;
-            if (pkt_->stream_index != video_stream_) {
+            if (ret < 0) {
+                // End of file. With B-frames the decoder still holds the last
+                // few frames in display order; an empty packet drains them.
+                // Draining again (a later call past the end) just reports EOF.
+                ret = avcodec_send_packet(codec_ctx_, nullptr);
+                if (ret < 0 && ret != AVERROR_EOF)
+                    return nullptr;
+            } else {
+                if (pkt_->stream_index != video_stream_) {
+                    av_packet_unref(pkt_);
+                    continue;
+                }
+                ret = avcodec_send_packet(codec_ctx_, pkt_);
                 av_packet_unref(pkt_);
-                continue;
+                if (ret < 0)
+                    return nullptr;
             }
-
-            ret = avcodec_send_packet(codec_ctx_, pkt_);
-            av_packet_unref(pkt_);
-            if (ret < 0)
-                return nullptr;
 
             while (true) {
                 ret = avcodec_receive_frame(codec_ctx_, frame_);
                 if (ret == AVERROR(EAGAIN))
                     break;
-                if (ret < 0)
+                if (ret < 0)   // AVERROR_EOF: drained, the frame is not there
                     return nullptr;
 
                 // Compute frame number from PTS

@@ -46,6 +46,7 @@ struct ExportWindowState {
     int tailcycle_layers = 0;   // 2D | 2D+3D | 3D only
     bool tailcycle_around_labels = false;
     int tailcycle_window = 32;  // clip frames around each label
+    int tailcycle_workers = 0;  // cameras extracted at once; 0 = the suggestion
     std::string tailcycle_range_error;
     bool include_video_index = false; // JARVIS: include video_index.json
     int scale_factor = 1; // JARVIS: write calibration so 3D reconstructs in (mm × scale_factor)
@@ -182,6 +183,24 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                 state.tailcycle_window = std::max(1, state.tailcycle_window);
             }
             const int tc_window = state.tailcycle_around_labels ? state.tailcycle_window : 0;
+
+            {
+                const int n_cams = std::max(1, (int)pm.camera_names.size());
+                const int suggested = ExportFormats::tailcycle_suggested_workers(n_cams);
+                if (state.tailcycle_workers <= 0) state.tailcycle_workers = suggested;
+                ImGui::SetNextItemWidth(160);
+                ImGui::SliderInt("Parallel cameras", &state.tailcycle_workers, 1, n_cams);
+                state.tailcycle_workers = std::clamp(state.tailcycle_workers, 1, n_cams);
+                ImGui::SetItemTooltip(
+                    "Cameras whose frames are extracted at the same time. Each keeps "
+                    "about one core busy\ndecoding and writing JPEGs; the suggestion "
+                    "is half this machine's cores.\nLower it if the disk the videos "
+                    "or the dataset are on cannot keep up.");
+                ImGui::SameLine();
+                ImGui::TextDisabled("suggested %d (%u cores)", suggested,
+                                    std::thread::hardware_concurrency());
+            }
+
             static const char *kSplits[] = {"train", "val", "test"};
             int remove_at = -1;
             for (size_t i = 0; i < state.tailcycle_ranges.size(); i++) {
@@ -519,6 +538,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                         ecfg.tailcycle_layers = state.tailcycle_layers;
                         ecfg.tailcycle_window =
                             state.tailcycle_around_labels ? state.tailcycle_window : 0;
+                        ecfg.tailcycle_workers = std::max(1, state.tailcycle_workers);
                         // n_frames must describe the media, not the labels: every
                         // frame index in the tables is validated against it, and
                         // the annotation range is usually a sparse subset.

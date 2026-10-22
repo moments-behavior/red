@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates lsb-release wget gnupg \
         libeigen3-dev libceres-dev libglfw3-dev libglew-dev libopenblas-dev \
         libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+        libturbojpeg0-dev \
         libgtest-dev libgmock-dev \
     && rm -rf /var/lib/apt/lists/*
 

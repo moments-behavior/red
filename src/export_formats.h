@@ -20,11 +20,14 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <numeric>
 #include <random>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -116,6 +119,7 @@ struct ExportConfig {
     int tailcycle_frame_end = 0;                // inclusive; 0 = to the end
     int tailcycle_layers = 0;   // 0 = 2D, 1 = 2D+3D, 2 = 3D only
     int tailcycle_window = 0;   // >0: only clips of this many frames around labels
+    int tailcycle_workers = 1;  // cameras extracted at once
 };
 
 // ── Per-camera image-size resolver ──
@@ -1048,6 +1052,31 @@ inline std::vector<std::pair<int, int>> tailcycle_clips(const std::vector<int> &
     return out;
 }
 
+// Runs job(0) .. job(n - 1) on up to `workers` threads, the calling thread
+// among them. A job returning false stops further jobs from starting; ones
+// already running finish. True when every job ran and returned true.
+inline bool run_parallel(int n, int workers, const std::function<bool(int)> &job) {
+    std::atomic<int> next{0};
+    std::atomic<bool> ok{true};
+    auto worker = [&] {
+        for (int i; ok.load() && (i = next.fetch_add(1)) < n;)
+            if (!job(i)) ok = false;
+    };
+    std::vector<std::thread> pool;
+    for (int w = 1; w < std::min(workers, n); w++) pool.emplace_back(worker);
+    worker();
+    for (auto &t : pool) t.join();
+    return ok;
+}
+
+// Cameras to extract at once, suggested for this machine: half its cores
+// (each camera keeps about one busy decoding and encoding JPEGs, and the rest
+// go to the disk and the UI), but no more than there are cameras.
+inline int tailcycle_suggested_workers(int n_cams) {
+    const int cores = (int)std::thread::hardware_concurrency();
+    return std::max(1, std::min(n_cams, cores / 2));
+}
+
 // Images an export of red frames [start, end] extracts (for the progress bar).
 inline long long tailcycle_image_estimate(const AnnotationMap &amap, int n_cams, int layers,
                                           int start, int end, int window) {
@@ -1074,10 +1103,15 @@ inline long long tailcycle_image_estimate(const AnnotationMap &amap, int n_cams,
 //
 // A 2D export writes one session per video with labels (a 2D session is one
 // camera, rule 5), named after the video.
+//
+// `created` collects the session folders this call made (not ones it wrote
+// into that were already there), so a cancelled 2D export can take back the
+// cameras it had finished.
 inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
                              std::string *status,
                              std::atomic<int> *img_counter = nullptr,
-                             std::atomic<bool> *cancel = nullptr) {
+                             std::atomic<bool> *cancel = nullptr,
+                             std::vector<std::string> *created = nullptr) {
     namespace fs = std::filesystem;
     if (!TailcycleExport::available()) {
         if (status)
@@ -1087,16 +1121,30 @@ inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
     }
     if (cfg.tailcycle_layers == 0 && cfg.camera_names.size() > 1) {
         const int last = cfg.tailcycle_frame_end > 0 ? cfg.tailcycle_frame_end : INT_MAX;
-        int written = 0;
         std::string skipped;
+        std::vector<size_t> todo;
         for (size_t i = 0; i < cfg.camera_names.size(); i++) {
-            if (tailcycle_labelled_frames(amap, (int)i, 0, cfg.tailcycle_frame_start, last).empty()) {
+            if (tailcycle_labelled_frames(amap, (int)i, 0, cfg.tailcycle_frame_start, last).empty())
                 skipped += " " + cfg.camera_names[i];
-                continue;
-            }
+            else
+                todo.push_back(i);
+        }
+        if (todo.empty()) {
+            if (status) *status = "Error: no video has labelled points or boxes in the frame range.";
+            return false;
+        }
+        // One camera's session is no use without the rest: cancelling removes
+        // the ones already finished too, or a lone Cam.../ is left looking like
+        // the whole export.
+        std::vector<std::string> made;
+        std::string error;
+        std::mutex mu;
+        const bool ok = run_parallel((int)todo.size(), cfg.tailcycle_workers, [&](int k) {
+            const size_t i = todo[k];
             ffmpeg_reader::FrameReader reader;
             if (!reader.open(camera_video_path(cfg.media_folder, cfg.camera_names[i]))) {
-                if (status) *status = "Error: cannot open the video for camera " + cfg.camera_names[i];
+                std::lock_guard<std::mutex> lock(mu);
+                if (error.empty()) error = "Error: cannot open the video for camera " + cfg.camera_names[i];
                 return false;
             }
             ExportConfig one = cfg;
@@ -1106,6 +1154,7 @@ inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
             one.image_height = {reader.height()};
             one.tailcycle_n_frames = reader.frameCount();
             one.tailcycle_fps = (float)reader.fps();
+            one.tailcycle_workers = 1;   // the parallelism is here, across cameras
             AnnotationMap one_amap = amap;
             for (auto &[f, fis] : one_amap)
                 for (FrameAnnotation &fa : fis) {
@@ -1113,13 +1162,26 @@ inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
                     fa.cameras.clear();
                     fa.cameras.push_back(std::move(cam));
                 }
-            if (!export_tailcycle(one, one_amap, status, img_counter, cancel)) return false;
-            written++;
-        }
-        if (written == 0) {
-            if (status) *status = "Error: no video has labelled points or boxes in the frame range.";
+            std::string one_status;
+            std::vector<std::string> mine;
+            const bool done = export_tailcycle(one, one_amap, &one_status, img_counter, cancel, &mine);
+            std::lock_guard<std::mutex> lock(mu);
+            made.insert(made.end(), mine.begin(), mine.end());
+            if (!done && error.empty()) error = one_status;
+            return done;
+        });
+        if (!ok) {
+            if (cancel && cancel->load(std::memory_order_relaxed) && !made.empty()) {
+                std::error_code ec;
+                for (const std::string &d : made) fs::remove_all(d, ec);
+                error += " Removed the " + std::to_string(made.size()) +
+                         " camera session(s) it had finished.";
+            }
+            if (status) *status = error;
             return false;
         }
+        if (created) created->insert(created->end(), made.begin(), made.end());
+        const size_t written = todo.size();
         if (status)
             *status = "Wrote " + std::to_string(written) + " 2D session(s)" +
                       (skipped.empty() ? "" : "; skipped videos with no labels:" + skipped);
@@ -1197,6 +1259,15 @@ inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
         if (i < cfg.image_height.size() && cfg.image_height[i] > 0)
             tc.calibration[i].image_height = cfg.image_height[i];
     }
+    // A session folder that is already there belongs to an earlier export.
+    // Writing into it replaces its tables, but cancelling must not delete it:
+    // that would take the earlier export's frames with it.
+    std::set<std::string> existed;
+    for (const char *suffix : {"", "_annotated", "_tracked"}) {
+        const fs::path d = fs::path(tc.output_folder) / tc.split / (tc.session_id + suffix);
+        if (fs::exists(d)) existed.insert(d.string());
+    }
+
     // A consumer reads group frame f as the f-th frame of the media in the
     // group folder -- source_frame_start is provenance, not an indexing
     // instruction. So only a whole-recording group may link the video; a
@@ -1206,58 +1277,73 @@ inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
     if (!TailcycleExport::export_session(tc, amap, &st, status)) return false;
 
     // A project with both hand-placed and predicted labels writes <id>_annotated
-    // and <id>_tracked; both need the pixels.
-    for (const std::string &sdir : st.sessions) {
-        for (size_t i = 0; i < cfg.camera_names.size(); i++) {
-            const std::string vpath = camera_video_path(cfg.media_folder, cfg.camera_names[i]);
-            if (!fs::exists(vpath)) {
-                if (status) *status = "Error: no video for camera " + cfg.camera_names[i];
-                return false;
-            }
-            ffmpeg_reader::FrameReader reader;
-            if (!reader.open(vpath)) {
-                if (status)
-                    *status = "Error: cannot open " + vpath + " to extract frames.";
-                return false;
-            }
-            for (size_t g = 0; g < clips.size(); g++) {
-                const auto [a, b] = clips[g];
-                const fs::path cdir = fs::path(sdir) / "groups" /
-                                      (tc.groups.empty() ? tc.group_id : tc.groups[g].id) /
-                                      cfg.camera_names[i];
-                fs::create_directories(cdir);
-                for (int f = a; f <= b; f++) {
-                    // Cancelling leaves a group with fewer frames than groups.pq
-                    // declares, which is worse than no session at all -- so remove
-                    // what was written rather than leaving something that looks
-                    // complete.
-                    if (cancel && cancel->load(std::memory_order_relaxed)) {
-                        std::error_code ec;
-                        for (const std::string &d : st.sessions) fs::remove_all(d, ec);
-                        if (status) *status = "Export cancelled; partial session removed.";
-                        return false;
-                    }
-                    const uint8_t *rgb = reader.readFrame(f);
-                    if (!rgb) {
-                        if (status)
-                            *status = "Error: frame " + std::to_string(f) + " of " +
-                                      cfg.camera_names[i] + " could not be decoded.";
-                        return false;
-                    }
-                    char name[32];
-                    snprintf(name, sizeof(name), "%06d.jpg", f - a);
-                    if (!JarvisExport::write_jpeg((cdir / name).string().c_str(),
-                                                  reader.width(), reader.height(), 3,
-                                                  rgb, cfg.jpeg_quality)) {
-                        if (status) *status = "Error: could not write " + (cdir / name).string();
-                        return false;
-                    }
-                    if (img_counter) img_counter->fetch_add(1);
-                }
+    // and <id>_tracked; both need the pixels. Each (session, camera) is one
+    // job, its own reader; the cameras run cfg.tailcycle_workers at a time.
+    std::vector<std::pair<std::string, size_t>> jobs;
+    for (const std::string &sdir : st.sessions)
+        for (size_t i = 0; i < cfg.camera_names.size(); i++) jobs.push_back({sdir, i});
+    std::string error;
+    std::mutex mu;
+    auto fail = [&](const std::string &msg) {
+        std::lock_guard<std::mutex> lock(mu);
+        if (error.empty()) error = msg;
+        return false;
+    };
+    const bool ok = run_parallel((int)jobs.size(), cfg.tailcycle_workers, [&](int k) {
+        const auto &[sdir, i] = jobs[k];
+        const std::string vpath = camera_video_path(cfg.media_folder, cfg.camera_names[i]);
+        if (!fs::exists(vpath)) return fail("Error: no video for camera " + cfg.camera_names[i]);
+        ffmpeg_reader::FrameReader reader;
+        if (!reader.open(vpath)) return fail("Error: cannot open " + vpath + " to extract frames.");
+        for (size_t g = 0; g < clips.size(); g++) {
+            const auto [a, b] = clips[g];
+            const fs::path cdir = fs::path(sdir) / "groups" /
+                                  (tc.groups.empty() ? tc.group_id : tc.groups[g].id) /
+                                  cfg.camera_names[i];
+            fs::create_directories(cdir);
+            for (int f = a; f <= b; f++) {
+                if (cancel && cancel->load(std::memory_order_relaxed)) return false;
+                const uint8_t *rgb = reader.readFrame(f);
+                if (!rgb)
+                    return fail("Error: frame " + std::to_string(f) + " of " +
+                                cfg.camera_names[i] + " could not be decoded.");
+                char name[32];
+                snprintf(name, sizeof(name), "%06d.jpg", f - a);
+                if (!JarvisExport::write_jpeg((cdir / name).string().c_str(),
+                                              reader.width(), reader.height(), 3,
+                                              rgb, cfg.jpeg_quality))
+                    return fail("Error: could not write " + (cdir / name).string());
+                if (img_counter) img_counter->fetch_add(1);
             }
         }
+        return true;
+    });
+    // Cancelling leaves a group with fewer frames than groups.pq declares,
+    // which is worse than no session at all -- so remove what was written
+    // rather than leaving something that looks complete. A folder that was
+    // there before is left alone, and said so.
+    if (!ok && cancel && cancel->load(std::memory_order_relaxed)) {
+        std::error_code ec;
+        std::string kept;
+        for (const std::string &d : st.sessions) {
+            if (existed.count(d)) kept += " " + d;
+            else fs::remove_all(d, ec);
+        }
+        if (status)
+            *status = kept.empty()
+                ? "Export cancelled; partial session removed."
+                : "Export cancelled. Not removed, as it was there before this "
+                  "export (its labels are rewritten, its frames incomplete):" + kept + ".";
+        return false;
+    }
+    if (!ok) {
+        if (status) *status = error;
+        return false;
     }
 
+    if (created)
+        for (const std::string &d : st.sessions)
+            if (!existed.count(d)) created->push_back(d);
     if (status) {
         int frames = 0;
         for (const auto &[a, b] : clips) frames += b - a + 1;

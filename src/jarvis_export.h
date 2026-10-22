@@ -3,11 +3,7 @@
 #include "ffmpeg_frame_reader.h"
 #include "json.hpp"
 #include "opencv_yaml_io.h"
-#ifdef __APPLE__
 #include <turbojpeg.h>
-#else
-#include "stb_image_write.h"
-#endif
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -32,9 +28,9 @@
 namespace JarvisExport {
 
 // ---------------------------------------------------------------------------
-// JPEG writing — turbojpeg (SIMD-accelerated) on macOS, stb fallback elsewhere
+// JPEG writing — turbojpeg (SIMD-accelerated) on every platform. stb's
+// encoder was the Linux/Windows fallback, at ~12x turbojpeg's time.
 // ---------------------------------------------------------------------------
-#ifdef __APPLE__
 inline bool write_jpeg(const char *path, int w, int h, int channels,
                        const uint8_t *data, int quality) {
     tjhandle tj = tjInitCompress();
@@ -54,12 +50,6 @@ inline bool write_jpeg(const char *path, int w, int h, int channels,
     tjDestroy(tj);
     return ok;
 }
-#else
-inline bool write_jpeg(const char *path, int w, int h, int channels,
-                       const uint8_t *data, int quality) {
-    return stbi_write_jpg(path, w, h, channels, data, quality) != 0;
-}
-#endif
 
 struct ExportStats {
     int train_frames = 0;
