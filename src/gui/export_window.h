@@ -295,16 +295,23 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
             state.tailcycle_range_error = range_err;
 
             ImGui::Spacing();
-            static const char *kLayers[] = {"2D keypoints", "2D keypoints + 3D",
-                                            "3D only"};
-            ImGui::Combo("Labels", &state.tailcycle_layers, kLayers, 3);
+            // Radio buttons rather than a combo: three choices, all worth seeing
+            // at once. Each carries its own tooltip.
+            ImGui::TextUnformatted("Labels:");
+            ImGui::SameLine();
+            ImGui::RadioButton("2D keypoints", &state.tailcycle_layers, 0);
+            ImGui::SetItemTooltip("One session per video, named after the video.");
+            ImGui::SameLine();
+            ImGui::RadioButton("2D keypoints + 3D", &state.tailcycle_layers, 1);
             ImGui::SetItemTooltip(
-                "2D keypoints: one session per video, named after the video.\n"
-                "2D + 3D: also ships red's triangulated solve, for a consumer that "
-                "wants these exact numbers rather than its own.\n"
-                "3D only: the honest choice when the 2D are themselves "
-                "reprojections of a 3D solve -- writing both would store the same "
-                "information twice.");
+                "Also ships red's triangulated solve, for a consumer that "
+                "wants these exact numbers rather than its own.");
+            ImGui::SameLine();
+            ImGui::RadioButton("3D only", &state.tailcycle_layers, 2);
+            ImGui::SetItemTooltip(
+                "The honest choice when the 2D are themselves reprojections of "
+                "a 3D solve -- writing both would store the same information "
+                "twice.");
 
         }
 

@@ -79,7 +79,7 @@ inline void DrawLabelingToolWindow(
             return pn;
         };
 
-        // Helper: render Prev [Jump] Next buttons. id_suffix for unique widget IDs.
+        // Helper: render Prev / Next buttons. id_suffix for unique widget IDs.
         auto jump_buttons = [&](PrevNext pn, const char *id_suffix) {
             ImGui::BeginDisabled(pn.prev < 0);
             char prev_id[32]; snprintf(prev_id, sizeof(prev_id), ICON_FK_CHEVRON_LEFT " Prev##%s", id_suffix);
@@ -88,8 +88,6 @@ inline void DrawLabelingToolWindow(
                 seek_all_cameras(scene, pn.prev, dc_context->video_fps, ps, true);
             }
             ImGui::EndDisabled();
-            ImGui::SameLine();
-            ImGui::TextDisabled("Jump");
             ImGui::SameLine();
             ImGui::BeginDisabled(pn.next < 0);
             char next_id[32]; snprintf(next_id, sizeof(next_id), "Next " ICON_FK_CHEVRON_RIGHT "##%s", id_suffix);
@@ -788,7 +786,7 @@ inline void DrawLabelingToolWindow(
                 ImGui::TextColored(*classes[state.selected_class].color, "%s",
                                    classes[state.selected_class].label);
             else
-                ImGui::TextDisabled("all labelled");
+                ImGui::TextUnformatted("all labelled");   // not gray: it is live, not disabled
             ImGui::SameLine();
             jump_buttons(pn, "class");
         }
